@@ -31,7 +31,10 @@ from utils import (
     load_fsdp_optimizer,
     get_seqlen_balanced_partitions
 )
-
+from models.ring_attn_utils import (
+    set_ring_attn_group,
+    get_ring_attn_group
+)
 
 class Trainer:
 
@@ -60,6 +63,7 @@ class Trainer:
             )
         if args.kl_coef > 0:
             self.ref_model, _ = self.prepare_model_optimizer(args.model_name, "actor", False)
+        self.prepare_ring_attn()
         self.llm = self.prepare_inference_engine()
         self.prepare_logger()
 
@@ -147,6 +151,30 @@ class Trainer:
 
         offload_fsdp_model_to_cpu(model)
         return model, optimizer
+
+    def prepare_ring_attn(self):
+        self.ring_attn_size = self.args.ring_attn_size
+        if self.ring_attn_size == 1:
+            self.ring_attn_rank = 0
+            return
+        
+        ring_head_stride = getattr(self.args, "ring_head_stride", 1)
+        for i in range(self.world_size // self.ring_attn_size):
+            ring_attn_ranks = list(
+                range(i * self.ring_attn_size, (i + 1) * self.ring_attn_size)
+            )
+            group = dist.new_group(ring_attn_ranks, backend="nccl")
+            if self.rank in ring_attn_ranks:
+                set_ring_attn_group(group)
+                self.ring_attn_rank = dist.get_rank(group=group)
+                self.ring_attn_ranks = ring_attn_ranks
+
+        from ring_flash_attn import substitute_hf_flash_attn
+        substitute_hf_flash_attn(self.ring_attn_group, ring_head_stride)
+
+    @property
+    def ring_attn_group(self):
+        return get_ring_attn_group()
 
     def prepare_inference_engine(self):
         
@@ -304,7 +332,7 @@ class Trainer:
 
         for batch in (tqdm(batches, desc=f"Step {self.step}, compute {prefix} log probs") if self.rank == 0 else batches):
 
-            logits = model(
+            logits = model( # TODO: add ring attn in forward func
                 batch["states"],
                 position_ids=batch["position_ids"],
                 use_cache=False
@@ -331,7 +359,7 @@ class Trainer:
 
         self.critic.eval()
         for batch in (tqdm(batches, desc=f"Step {self.step}, compute GAE") if self.rank == 0 else batches):
-            values = self.critic(
+            values = self.critic( # TODO: add ring attn in forward func
                 batch["states"],
                 position_ids=batch["position_ids"],
                 use_cache=False
@@ -346,6 +374,7 @@ class Trainer:
 
             # A_t = \delta_t + \gamma * \lambda * A_{t+1}
             # if s_{t+1} is a terminal state, A_{t+1} = 0
+            # TODO: Prepare for ring attn: Shuffle into zigzag will shuffle the order of delta_t
             gae, reversed_gaes = 0, []
             for t in reversed(range(values.shape[-1])):
                 gae = delta[0, t] + self.args.gamma * self.args.lamda * batch["eos_mask"][0, t] * gae
@@ -382,7 +411,7 @@ class Trainer:
         total_responses = sum([(batch["eos_mask"] == 0).sum() for batch in batches])
         for batch in (tqdm(batches, desc=f"Step {self.step}, update actor") if self.rank == 0 else batches):
 
-            logits = self.model(
+            logits = self.model( # TODO: add ring attn in forward func
                 batch["states"],
                 position_ids=batch["position_ids"],
                 use_cache=False
@@ -470,6 +499,8 @@ def main():
     parser.add_argument("--model_name", type=str)
     parser.add_argument("--tp_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.8)
+    parser.add_argument("--ring_attn_size", type=int, default=1)
+    parser.add_argument("--ring_head_stride", type=int, default=1)
 
     parser.add_argument(
         "--critic_model_name", type=str, default=None,

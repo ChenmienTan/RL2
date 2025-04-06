@@ -17,6 +17,8 @@ torchrun \
     --max_length_per_device 8192 \
     --test_freq 8 \
     --save_freq 32 \
-    --disable_wandb
+    --disable_wandb \
+    --ring_attn_size 2 \
+    --ring_head_stride 2
 
     # --critic_model_name Qwen/Qwen2.5-7B \
