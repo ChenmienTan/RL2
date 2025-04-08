@@ -49,7 +49,7 @@ def use_ring_attn(flag):
 
 
 def create_ring_flash_attention_forward(
-    process_group: dist.ProcessGroup, heads_k_stride: int
+    process_group: dist.ProcessGroup
 ):
     # before transformers 4.47
     def _flash_attention_forward(
@@ -127,6 +127,7 @@ def create_ring_flash_attention_forward(
         batch_size = query_states.size(0)
         assert batch_size == 1, "varlen data should be processed in advance."
 
+        print(f"DATA_PARAMS: {DATA_PARAMS}")
         attn_output = zigzag_ring_flash_attn_varlen_func(
             query_states.squeeze(dim=0),
             key_states.squeeze(dim=0),
@@ -288,14 +289,14 @@ def flash_attention_forward(
     return attn_output, None
 
 
-def substitute_hf_flash_attn(process_group: dist.ProcessGroup, heads_k_stride: int):
+def substitute_hf_flash_attn(process_group: dist.ProcessGroup):
     try:
         # substitute flash attn
         old_flash_attention_forward = (
             transformers.modeling_flash_attention_utils._flash_attention_forward
         )
         new_flash_attention_forward_list = create_ring_flash_attention_forward(
-            process_group, heads_k_stride
+            process_group
         )
         for new_flash_attention_forward in new_flash_attention_forward_list:
             if check_params(old_flash_attention_forward, new_flash_attention_forward):
@@ -364,19 +365,48 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
     cu_seqlens = F.pad(F.pad(cu_seqlens, (1, 0), value=0), (0, 1), value=total_seq_len)
     DATA_PARAMS["cu_seqlens"] = cu_seqlens
     DATA_PARAMS["max_seqlen"] = total_seq_len
+    print(f"Updated ring attn params: {DATA_PARAMS}")
 
-def convert_ring_attn_params(sequences, attention_mask, packed_seq_lens, ring_attn_group):
-    # each rank within the ring group will process sequences[start:end]
+
+def calculate_packed_seq_lens_from_position_ids(position_ids):
+    """
+    Calculate packed sequence lengths from position IDs.
+    
+    Args:
+        position_ids: Tensor of shape [batch_size, seq_len] containing position IDs
+                     where each sequence starts with position ID 0
+    
+    Returns:
+        List of sequence lengths
+    """
+    assert position_ids.size(0) == 1, "Expected batch size of 1"
+    pos_ids_flat = position_ids[0]  # Batch size of 1
+    resets = torch.where(pos_ids_flat[1:] == 0)[0] + 1
+    
+    # Add start and end indices to get complete segments
+    indices = torch.cat([torch.tensor([0], device=resets.device), resets, 
+                         torch.tensor([pos_ids_flat.size(0)], device=resets.device)])
+    
+    # Calculate lengths of each segment
+    packed_seq_lens = [indices[i+1] - indices[i] for i in range(len(indices)-1)]
+    
+    return packed_seq_lens
+
+def convert_ring_attn_params(sequences, position_ids, ring_attn_group):
+    # Calculate packed sequence lengths from position IDs
+    packed_seq_lens = calculate_packed_seq_lens_from_position_ids(position_ids)
+    
+    # Each rank within the ring group will process sequences[start:end]
     ring_attn_rank = dist.get_rank(group=ring_attn_group)
     ring_attn_size = dist.get_world_size(group=ring_attn_group)
     total_seq_len = sequences.numel()
     local_seq_len = total_seq_len // ring_attn_size
     start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
     sequences = sequences[:, start:end]
-    attention_mask = attention_mask[:, start:end]
-    position_ids = reset_ring_attn_position_ids(start, end, packed_seq_lens)
+    position_ids = position_ids[:, start:end]
+    
     update_ring_attn_params(packed_seq_lens, total_seq_len)
-    return sequences, attention_mask, position_ids
+    return sequences, position_ids
 
 
 def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, pad_token_id=0):
@@ -427,3 +457,18 @@ def unpad_sequences(
         if kl is not None:
             kl = kl[:, :-pad_len]
     return sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, values, kl
+
+# Reset positions for packed samples
+# For example
+# Input: attention_mask = torch.tensor([[1, 1, 1, 2, 2, 2, 3, 3, 0]])
+# Output: position_ids  = torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 0]])
+def reset_position_ids(attention_mask):
+    position_ids = torch.zeros_like(attention_mask, dtype=torch.long)
+    for i in range(attention_mask.size(0)):
+        mask = attention_mask[i]
+        seq_num = mask.max().item()
+        for index in range(1, seq_num + 1):
+            sample_mask = mask == index
+            sample_length = sample_mask.sum().item()
+            position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
+    return position_ids
