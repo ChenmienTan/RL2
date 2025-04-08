@@ -16,17 +16,6 @@ from ring_flash_attn import (
     zigzag_ring_flash_attn_varlen_func
 )
 
-RING_ATTN_GROUP = None
-
-
-def set_ring_attn_group(group):
-    global RING_ATTN_GROUP
-    RING_ATTN_GROUP = group
-
-
-def get_ring_attn_group():
-    return RING_ATTN_GROUP
-
 try:
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 except:
@@ -34,18 +23,11 @@ except:
 
 
 DATA_PARAMS = {}
-RING_ATTN_SWITCH = True
-
 
 def check_params(f1, f2):
     return len(inspect.signature(f1).parameters) == len(
         inspect.signature(f2).parameters
     )
-
-
-def use_ring_attn(flag):
-    global RING_ATTN_SWITCH
-    RING_ATTN_SWITCH = flag
 
 
 def create_ring_flash_attention_forward(
@@ -127,7 +109,6 @@ def create_ring_flash_attention_forward(
         batch_size = query_states.size(0)
         assert batch_size == 1, "varlen data should be processed in advance."
 
-        print(f"DATA_PARAMS: {DATA_PARAMS}")
         attn_output = zigzag_ring_flash_attn_varlen_func(
             query_states.squeeze(dim=0),
             key_states.squeeze(dim=0),
@@ -303,8 +284,6 @@ def substitute_hf_flash_attn(process_group: dist.ProcessGroup):
                 transformers.modeling_flash_attention_utils._flash_attention_forward = (
                     lambda *args, **kwargs: (
                         new_flash_attention_forward(*args, **kwargs)
-                        if RING_ATTN_SWITCH
-                        else old_flash_attention_forward(*args, **kwargs)
                     )
                 )
                 break
@@ -356,7 +335,6 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
 
     Note that total_seq_len may be larger than the sum of packed_seq_lens because of padding.
     """
-    assert RING_ATTN_GROUP is not None
     cu_seqlens = torch.cumsum(
         torch.tensor(packed_seq_lens, device=torch.cuda.current_device(), dtype=torch.int32),
         dim=-1,
@@ -365,8 +343,6 @@ def update_ring_attn_params(packed_seq_lens, total_seq_len):
     cu_seqlens = F.pad(F.pad(cu_seqlens, (1, 0), value=0), (0, 1), value=total_seq_len)
     DATA_PARAMS["cu_seqlens"] = cu_seqlens
     DATA_PARAMS["max_seqlen"] = total_seq_len
-    print(f"Updated ring attn params: {DATA_PARAMS}")
-
 
 def calculate_packed_seq_lens_from_position_ids(position_ids):
     """
@@ -392,83 +368,70 @@ def calculate_packed_seq_lens_from_position_ids(position_ids):
     
     return packed_seq_lens
 
-def convert_ring_attn_params(sequences, position_ids, ring_attn_group):
+def convert_ring_attn_params(sequences, position_ids, process_group):
     # Calculate packed sequence lengths from position IDs
     packed_seq_lens = calculate_packed_seq_lens_from_position_ids(position_ids)
     
     # Each rank within the ring group will process sequences[start:end]
-    ring_attn_rank = dist.get_rank(group=ring_attn_group)
-    ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    total_seq_len = sequences.numel()
-    local_seq_len = total_seq_len // ring_attn_size
-    start, end = ring_attn_rank * local_seq_len, (ring_attn_rank + 1) * local_seq_len
+    ring_attn_rank = dist.get_rank(group=process_group)
+    ring_attn_size = dist.get_world_size(group=process_group)
+    total_seq_len = sequences.size(1)  # Use size(1) to get sequence length
+    
+    # Give the remainder to the last rank
+    base_len = total_seq_len // ring_attn_size
+    
+    if ring_attn_rank < ring_attn_size - 1:
+        start = ring_attn_rank * base_len
+        end = start + base_len
+    else:
+        # Last rank gets base_len + remainder
+        start = ring_attn_rank * base_len
+        end = total_seq_len  # This includes the remainder
+    
     sequences = sequences[:, start:end]
     position_ids = position_ids[:, start:end]
     
     update_ring_attn_params(packed_seq_lens, total_seq_len)
-    return sequences, position_ids
+    return sequences, position_ids, total_seq_len
 
-
-def pad_sequences(sequences, attention_mask, num_actions, packed_seq_lens, ring_attn_group, pad_token_id=0):
-    # Pads the input sequences and attention mask to ensure that their lengths are multiples of the ring attention size.
-    ring_attn_size = dist.get_world_size(group=ring_attn_group)
-    if isinstance(sequences, torch.Tensor):
-        seqlen = sequences.shape[-1]
-        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
-        padded = torch.tensor([pad_token_id] * pad_len, device=sequences.device, dtype=sequences.dtype).unsqueeze(0)
-        sequences = torch.cat([sequences, padded], dim=1)
-        max_seq_id = attention_mask.max().item()
-        attention_mask = torch.cat(
-            [attention_mask, (max_seq_id + 1) * torch.ones(1, pad_len, device="cuda", dtype=torch.float)], dim=-1
-        )
-    elif isinstance(sequences, list):
-        seqlen = len(sequences)
-        pad_len = (ring_attn_size - seqlen % ring_attn_size) % ring_attn_size
-        sequences += [pad_token_id] * pad_len
-        attention_mask += [len(packed_seq_lens) + 1] * pad_len
-    else:
-        raise "sequences is not available type"
-    num_actions[-1] += pad_len
-    packed_seq_lens[-1] += pad_len
-    return pad_len, sequences, attention_mask, num_actions, packed_seq_lens
-
-
-def unpad_sequences(
-    pad_len,
-    sequences,
-    attention_mask,
-    num_actions,
-    packed_seq_lens,
-    ring_attn_group,
-    action_log_probs=None,
-    values=None,
-    kl=None,
-):
-    # Removes the padding from the input sequences, attention mask, and other optional tensors after padding.
-    if pad_len > 0:
-        sequences = sequences[:, :-pad_len]
-        attention_mask = attention_mask[:, :-pad_len]
-        num_actions[-1] -= pad_len
-        packed_seq_lens[-1] -= pad_len
-        if action_log_probs is not None:
-            action_log_probs = action_log_probs[:, :-pad_len]
-        if values is not None:
-            values = values[:, :-pad_len]
-        if kl is not None:
-            kl = kl[:, :-pad_len]
-    return sequences, attention_mask, num_actions, packed_seq_lens, action_log_probs, values, kl
-
-# Reset positions for packed samples
-# For example
-# Input: attention_mask = torch.tensor([[1, 1, 1, 2, 2, 2, 3, 3, 0]])
-# Output: position_ids  = torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 0]])
-def reset_position_ids(attention_mask):
-    position_ids = torch.zeros_like(attention_mask, dtype=torch.long)
-    for i in range(attention_mask.size(0)):
-        mask = attention_mask[i]
-        seq_num = mask.max().item()
-        for index in range(1, seq_num + 1):
-            sample_mask = mask == index
-            sample_length = sample_mask.sum().item()
-            position_ids[i, sample_mask] = torch.arange(sample_length, device=mask.device)
-    return position_ids
+def all_gather_with_grad(tensor, group, expected_sizes):
+    """Custom all_gather that preserves gradients"""
+    world_size = dist.get_world_size(group=group)
+    
+    # Regular gather for forward pass
+    gathered_tensors = []
+    for r in range(world_size):
+        # Create empty tensor of the right size for this rank
+        tensor_shape = list(tensor.shape)
+        tensor_shape[1] = expected_sizes[r]
+        gathered_tensors.append(torch.zeros(*tensor_shape, 
+                              dtype=tensor.dtype, 
+                              device=tensor.device))
+    
+    dist.all_gather(gathered_tensors, tensor, group=group)
+    
+    # If we need gradients, set up the autograd function
+    if tensor.requires_grad:
+        # Create copies that require grad
+        gathered_tensors = [t.clone() if i != dist.get_rank(group=group) else tensor 
+                           for i, t in enumerate(gathered_tensors)]
+        
+        # Register autograd function for backward pass
+        class _AllGatherGrad(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, input_tensor, rank, group):
+                ctx.rank = rank
+                ctx.group = group
+                return input_tensor
+                
+            @staticmethod
+            def backward(ctx, grad_output):
+                # All-reduce the gradients
+                dist.all_reduce(grad_output, op=dist.ReduceOp.SUM, group=ctx.group)
+                return grad_output, None, None
+        
+        # Apply the autograd function to each tensor
+        for i in range(world_size):
+            gathered_tensors[i] = _AllGatherGrad.apply(gathered_tensors[i], i, group)
+    
+    return gathered_tensors

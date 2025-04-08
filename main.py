@@ -30,13 +30,10 @@ from utils import (
     get_seqlen_balanced_partitions
 )
 from models.ring_attn_utils import (
-    set_ring_attn_group,
-    get_ring_attn_group,
     substitute_hf_flash_attn,
 
 )
-from models import get_llm_for_sequence_regression, get_actor_model
-import inspect
+from models import get_actor_model, get_critic_model
 
 def actor_forward(
     model,
@@ -51,18 +48,19 @@ def actor_forward(
         ring_attn_group=ring_attn_group,
         use_cache=False
     ).logits / temperature
-
+    
     return torch.gather(
         logits.log_softmax(-1),
         dim=-1,
         index=minibatch["actions"].unsqueeze(-1)
     ).squeeze(-1) * minibatch["action_mask"]
 
-def critic_forward(model, minibatch: Dict[str, torch.Tensor]) -> torch.Tensor:
+def critic_forward(model, minibatch: Dict[str, torch.Tensor], ring_attn_group: Optional[torch.Tensor] = None) -> torch.Tensor:
     return model(
         input_ids=minibatch["states"],
         position_ids=minibatch["position_ids"],
-        use_cache=False
+        use_cache=False,
+        ring_attn_group=ring_attn_group
     ).logits.squeeze(-1) * minibatch["action_mask"]
 
 def accumulate_to_eos(minibatch: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
@@ -174,13 +172,7 @@ class Trainer:
         elif model_type == "critic":
             model_cls = AutoModelForTokenClassification
             model_kwargs = {"num_labels": 1}
-            # model = get_llm_for_sequence_regression(model_name, **model_kwargs)
-            model = model_cls.from_pretrained(
-                model_name,
-                torch_dtype=torch.float32 if train else torch.bfloat16,
-                attn_implementation="flash_attention_2",
-                **model_kwargs
-            )
+            model = get_critic_model(model_name)
         else:
             raise NotImplementedError
 
@@ -213,18 +205,19 @@ class Trainer:
         return model, optimizer
 
     def prepare_ring_attn(self):
-        if self.sp_device_mesh["sp"].get_local_rank() in range(self.args.sp_size):
-            # Use the existing process group from the device mesh
-            ring_attn_group = self.sp_device_mesh["sp"].get_group()
-            set_ring_attn_group(ring_attn_group)
-            self.ring_attn_rank = self.sp_device_mesh["sp"].get_local_rank()
-            self.ring_attn_ranks = list(range(self.args.sp_size))
+        if self.sp_device_mesh["sp"].size() == 1:
+            return
+        
+        self.ring_attn_rank = self.sp_device_mesh["sp"].get_local_rank()
+        self.ring_attn_ranks = list(range(self.args.sp_size))
 
         substitute_hf_flash_attn(self.ring_attn_group)
 
     @property
     def ring_attn_group(self):
-        return get_ring_attn_group()
+        if self.sp_device_mesh["sp"].size() == 1:
+            return None
+        return self.sp_device_mesh["sp"].get_group()
 
     def prepare_inference_engine(self):
 
@@ -249,7 +242,7 @@ class Trainer:
             # SPMD, see https://github.com/vllm-project/vllm/issues/11400
             gpu_memory_utilization=self.args.gpu_memory_utilization,
             enable_sleep_mode=True,
-            # seed=self.rollout_device_mesh["dp"].get_local_rank(),
+            seed=self.rollout_device_mesh["dp"].get_local_rank(),
             # to save memory for update, see `prepare_update`
         )
 
@@ -399,7 +392,7 @@ class Trainer:
             tqdm(minibatches, desc=f"Step {self.step + 1}, compute values")
             if self.device_mesh.get_rank() == 0 else minibatches
         ):
-            minibatch["values"] = critic_forward(self.critic, minibatch)
+            minibatch["values"] = critic_forward(self.critic, minibatch, self.ring_attn_group)
         
         # no need to offload critic because it will be updated soon
 

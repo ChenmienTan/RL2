@@ -20,7 +20,6 @@ torchrun \
     --test_freq 8 \
     --save_freq 32 \
     --disable_wandb \
-    --ring_attn_size 2 \
-    --ring_head_stride 2
+    --sp_size 2
 
     # --critic_model_name Qwen/Qwen2.5-7B \
