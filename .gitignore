@@ -1,0 +1,5 @@
+__pycache__/
+wandb/
+core-*
+nohup.out
+test.py

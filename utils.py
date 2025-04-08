@@ -17,48 +17,34 @@ def get_auto_wrap_policy(model):
         transformer_layer_cls={wrap_cls}
     )
 
-def dispatch(batch, rank, world_size):
+def dispatch(item, device_mesh):
 
-    batch_size = len(list(batch.values())[0])
-    batch_size_per_process = math.ceil(batch_size / world_size)
-    return {
-        k: v[rank * batch_size_per_process:(rank + 1) * batch_size_per_process]
-        for k, v in batch.items()
-    }
-
-def all_gather(batch, group=None):
-
-    all_batch = {}
-    for key, value in batch.items():
-        all_values = [None for _ in range(dist.get_world_size(group=group))]
-        dist.all_gather_object(all_values, value, group=group)
-        all_batch[key] = sum(all_values, [])
-
-    return all_batch
-
-def compute_seq_logps(logps, eos_mask):
-
-    logp, seq_logps = 0, []
-    for t in range(logps.shape[-1]):
-        # add the log prob if the token is an action
-        logp += logps[0, t]
-        if eos_mask[0, t] == 1:
-            seq_logps.append(0)
-        else:
-            seq_logps.append(logp)
-            logp = 0
-    
-    return torch.FloatTensor([seq_logps]).to(logps.device)
-
-def compute_kl_term(old_logps, ref_logps, kl_estimator):
-
-    logp_diffs = old_logps - ref_logps
-    if kl_estimator == "k1":
-        return logp_diffs
-    elif kl_estimator == "k2":
-        return logp_diffs.pow(2) / 2
+    if isinstance(item, dict):
+        return {
+            k: dispatch(v, device_mesh)
+            for k, v in item.items()
+        }
+    elif isinstance(item, list):
+        rank = device_mesh.get_local_rank()
+        batch_size = len(item)
+        batch_size_per_process = math.ceil(batch_size / device_mesh.size())
+        return item[rank * batch_size_per_process:(rank + 1) * batch_size_per_process]
     else:
-        return logp_diffs + torch.exp(- logp_diffs) - 1
+        raise NotImplementedError
+
+def all_gather(item, group=None):
+
+    if isinstance(item, dict):
+        return {
+            k: all_gather(v, group=group)
+            for k, v in item.items()
+        }
+    elif isinstance(item, list):
+        all_lists = [None for _ in range(dist.get_world_size(group=group))]
+        dist.all_gather_object(all_lists, item, group=group)
+        return sum(all_lists, [])
+    else:
+        raise NotImplementedError
 
 # Adapted from veRL
 
