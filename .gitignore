@@ -122,3 +122,8 @@ dmypy.json
 # Windows
 Thumbs.db
 ehthumbs.db
+
+wandb/
+core-*
+nohup.out
+test.py
