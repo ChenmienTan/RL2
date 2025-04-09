@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 import argparse
 import math
 import importlib.util
@@ -29,18 +29,30 @@ from utils import (
     load_fsdp_optimizer,
     get_seqlen_balanced_partitions
 )
+from models.ring_attn_utils import (
+    substitute_hf_flash_attn,
+
+)
+from models import get_actor_model, get_critic_model
 
 def actor_forward(
     model,
     minibatch: Dict[str, torch.Tensor],
-    temperature: float
+    temperature: float,
+    ring_attn_group: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
+    if ring_attn_group is not None:
+        dist.barrier(group=ring_attn_group)
 
     logits = model(
         input_ids=minibatch["states"],
         position_ids=minibatch["position_ids"],
+        ring_attn_group=ring_attn_group,
         use_cache=False
     ).logits / temperature
+
+    if ring_attn_group is not None: # necessary to prevent hanging
+        dist.barrier(group=ring_attn_group)
 
     return torch.gather(
         logits.log_softmax(-1),
@@ -48,12 +60,21 @@ def actor_forward(
         index=minibatch["actions"].unsqueeze(-1)
     ).squeeze(-1) * minibatch["action_mask"]
 
-def critic_forward(model, minibatch: Dict[str, torch.Tensor]) -> torch.Tensor:
-    return model(
+def critic_forward(model, minibatch: Dict[str, torch.Tensor], ring_attn_group: Optional[torch.Tensor] = None) -> torch.Tensor:
+    if ring_attn_group is not None:
+        dist.barrier(group=ring_attn_group)
+
+    results = model(
         input_ids=minibatch["states"],
         position_ids=minibatch["position_ids"],
-        use_cache=False
+        use_cache=False,
+        ring_attn_group=ring_attn_group
     ).logits.squeeze(-1) * minibatch["action_mask"]
+
+    if ring_attn_group is not None: # necessary to prevent hanging
+        dist.barrier(group=ring_attn_group)
+
+    return results
 
 def accumulate_to_eos(minibatch: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
 
@@ -119,6 +140,7 @@ class Trainer:
             )
         self.llm = self.prepare_inference_engine()
         self.prepare_logger()
+        # self.prepare_ring_attn()
 
     def prepare_reward_fn(self):
         
@@ -159,18 +181,13 @@ class Trainer:
         if model_type == "actor":
             model_cls = AutoModelForCausalLM
             model_kwargs = {}
+            model = get_actor_model(model_name, **model_kwargs)
         elif model_type == "critic":
             model_cls = AutoModelForTokenClassification
             model_kwargs = {"num_labels": 1}
+            model = get_critic_model(model_name)
         else:
             raise NotImplementedError
-
-        model = model_cls.from_pretrained(
-            model_name,
-            torch_dtype=torch.float32 if train else torch.bfloat16,
-            attn_implementation="flash_attention_2",
-            **model_kwargs
-        )
 
         if train and not self.args.disable_gradient_checkpointing:
             model.gradient_checkpointing_enable()
@@ -200,6 +217,21 @@ class Trainer:
         offload_fsdp_model_to_cpu(model)
         return model, optimizer
 
+    def prepare_ring_attn(self):
+        if self.sp_device_mesh["sp"].size() == 1:
+            return
+        
+        self.ring_attn_rank = self.sp_device_mesh["sp"].get_local_rank()
+        self.ring_attn_ranks = list(range(self.args.sp_size))
+
+        substitute_hf_flash_attn(self.ring_attn_group)
+
+    @property
+    def ring_attn_group(self):
+        if self.sp_device_mesh["sp"].size() == 1:
+            return None
+        return self.sp_device_mesh["sp"].get_group()
+
     def prepare_inference_engine(self):
 
         torch.cuda.manual_seed(self.rollout_device_mesh["dp"].get_local_rank())
@@ -222,7 +254,8 @@ class Trainer:
             distributed_executor_backend="external_launcher",
             # SPMD, see https://github.com/vllm-project/vllm/issues/11400
             gpu_memory_utilization=self.args.gpu_memory_utilization,
-            enable_sleep_mode=True
+            enable_sleep_mode=True,
+            seed=self.rollout_device_mesh["dp"].get_local_rank(),
             # to save memory for update, see `prepare_update`
         )
 
@@ -359,7 +392,7 @@ class Trainer:
             tqdm(minibatches, desc=f"Step {self.step + 1}, compute {prefix} log probs")
             if self.device_mesh.get_rank() == 0 else minibatches
         ):
-            minibatch[f"{prefix}_logps"] = actor_forward(model, minibatch, self.args.train_temperature)
+            minibatch[f"{prefix}_logps"] = actor_forward(model, minibatch, self.args.train_temperature, self.ring_attn_group)
             
         offload_fsdp_model_to_cpu(model)
 
@@ -372,7 +405,7 @@ class Trainer:
             tqdm(minibatches, desc=f"Step {self.step + 1}, compute values")
             if self.device_mesh.get_rank() == 0 else minibatches
         ):
-            minibatch["values"] = critic_forward(self.critic, minibatch)
+            minibatch["values"] = critic_forward(self.critic, minibatch, self.ring_attn_group)
         
         # no need to offload critic because it will be updated soon
 
@@ -516,7 +549,7 @@ class Trainer:
             total_actions = sum([minibatch["action_mask"].sum() for minibatch in batch])
             total_sequences = sum([(minibatch["eos_mask"]).sum() for minibatch in batch])
             for minibatch in batch:
-                logps = actor_forward(self.model, minibatch, self.args.train_temperature)
+                logps = actor_forward(self.model, minibatch, self.args.train_temperature, self.ring_attn_group)
                 ratio = (logps - minibatch["old_logps"]).exp()
                 cliped_ratio = torch.clamp(ratio, 1 - self.args.epsilon_clip, 1 + self.args.epsilon_clip)
                 loss = - torch.min(minibatch["advantages"] * ratio, minibatch["advantages"] * cliped_ratio).sum() / total_actions
