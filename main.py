@@ -41,6 +41,8 @@ def actor_forward(
     temperature: float,
     ring_attn_group: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
+    if ring_attn_group is not None:
+        dist.barrier(group=ring_attn_group)
 
     logits = model(
         input_ids=minibatch["states"],
@@ -48,7 +50,10 @@ def actor_forward(
         ring_attn_group=ring_attn_group,
         use_cache=False
     ).logits / temperature
-    
+
+    if ring_attn_group is not None: # necessary to prevent hanging
+        dist.barrier(group=ring_attn_group)
+
     return torch.gather(
         logits.log_softmax(-1),
         dim=-1,
@@ -56,12 +61,20 @@ def actor_forward(
     ).squeeze(-1) * minibatch["action_mask"]
 
 def critic_forward(model, minibatch: Dict[str, torch.Tensor], ring_attn_group: Optional[torch.Tensor] = None) -> torch.Tensor:
-    return model(
+    if ring_attn_group is not None:
+        dist.barrier(group=ring_attn_group)
+
+    results = model(
         input_ids=minibatch["states"],
         position_ids=minibatch["position_ids"],
         use_cache=False,
         ring_attn_group=ring_attn_group
     ).logits.squeeze(-1) * minibatch["action_mask"]
+
+    if ring_attn_group is not None: # necessary to prevent hanging
+        dist.barrier(group=ring_attn_group)
+
+    return results
 
 def accumulate_to_eos(minibatch: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
 
