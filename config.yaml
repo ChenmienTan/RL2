@@ -1,0 +1,59 @@
+data:
+  train_data_path: data/orz.json
+  test_data_path: data/olympiadbench.json
+  max_prompt_length: 2048
+  batch_size: 128
+  rollout_per_prompt: 64
+  
+actor:
+  model_name: Qwen/Qwen2.5-7B
+  gradient_checkpointing: true
+  sp_size: 1
+  train_max_length_per_device: 8192
+  inference_max_length_per_device: 32768
+  epsilon_clip: 0.2
+  update_per_rollout: 1
+  lr: 1e-6
+  weight_decay: 1e-2
+  max_grad_norm: 1.0
+
+  rollout:
+    tp_size: 1
+    gpu_memory_utilization: 0.9
+    train_temperature: 1.0
+    test_temperature: 0.0
+    max_response_length: 6192
+    reward_fn_path: rewards/math.py
+
+  kl:
+    coef: 0.0
+    type: null # `reward` or `loss`
+    level: null # `token` or `sequence`
+    estimator: null # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html
+
+critic:
+  model_name: Qwen/Qwen2.5-7B
+  gradient_checkpointing: true
+  sp_size: 1
+  train_max_length_per_device: 8192
+  inference_max_length_per_device: 32768
+  value_clip: 0.5
+  update_per_rollout: 4
+  lr: 5e-6
+  weight_decay: 1e-2
+  max_grad_norm: 1.0
+
+adv:
+  estimator: gae
+  gamma: 1.0
+  lamda: 1.0
+  group_norm: false
+  
+trainer:
+  project: OpenReasonerZero
+  experiment_name: qwen2.5-7b
+  n_epochs: 1
+  test_freq: 8
+  save_freq: 32
+  save_path: ckpts
+  

@@ -1,3 +1,4 @@
+from typing import Optional
 import os
 import math
 import functools
@@ -26,23 +27,60 @@ def dispatch(item, device_mesh):
         }
     elif isinstance(item, list):
         rank = device_mesh.get_local_rank()
-        batch_size = len(item)
-        batch_size_per_process = math.ceil(batch_size / device_mesh.size())
-        return item[rank * batch_size_per_process:(rank + 1) * batch_size_per_process]
+        bsz = len(item)
+        bsz_per_process = math.ceil(bsz / device_mesh.size())
+        return item[rank * bsz_per_process:(rank + 1) * bsz_per_process]
     else:
         raise NotImplementedError
 
-def all_gather(item, group=None):
+def all_gather(item, device_mesh):
 
     if isinstance(item, dict):
         return {
-            k: all_gather(v, group=group)
+            k: all_gather(v, device_mesh)
             for k, v in item.items()
         }
     elif isinstance(item, list):
-        all_lists = [None for _ in range(dist.get_world_size(group=group))]
-        dist.all_gather_object(all_lists, item, group=group)
+        all_lists = [None for _ in range(device_mesh.size())]
+        dist.all_gather_object(all_lists, item, group=device_mesh.get_group())
         return sum(all_lists, [])
+    else:
+        raise NotImplementedError
+    
+def accumulate_to_eos(
+    value: torch.Tensor,
+    eos_mask: torch.Tensor
+) -> torch.Tensor:
+    
+    end_indices = torch.where(eos_mask)[1]
+    start_indices = torch.cat((
+        torch.LongTensor([0]).to(torch.cuda.current_device()),
+        end_indices[:-1] + 1
+    ))
+
+    result = torch.zeros_like(value)
+    for start_idx, end_idx in zip(start_indices, end_indices):
+        result[0, end_idx] = value[0, start_idx:end_idx + 1].sum()
+    return result
+
+def compute_kl_term(
+    logps: torch.Tensor,
+    ref_logps: torch.Tensor,
+    kl_estimator: str,
+    eos_mask: Optional[torch.Tensor]=None
+) -> torch.Tensor:
+    
+    if eos_mask is not None:
+        logps = accumulate_to_eos(logps, eos_mask)
+        ref_logps = accumulate_to_eos(logps, eos_mask)
+
+    logp_diffs = logps - ref_logps
+    if kl_estimator == "k1":
+        return logp_diffs
+    elif kl_estimator == "k2":
+        return logp_diffs.pow(2) / 2
+    elif kl_estimator == "k3":
+        return logp_diffs + torch.exp(- logp_diffs) - 1
     else:
         raise NotImplementedError
 
