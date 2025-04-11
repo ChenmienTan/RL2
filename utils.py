@@ -18,43 +18,31 @@ def get_auto_wrap_policy(model):
         transformer_layer_cls={wrap_cls}
     )
 
-def dispatch(item, device_mesh):
+def dispatch_list(item, device_mesh):
 
-    if isinstance(item, dict):
-        return {
-            k: dispatch(v, device_mesh)
-            for k, v in item.items()
-        }
-    elif isinstance(item, list):
-        rank = device_mesh.get_local_rank()
-        bsz = len(item)
-        bsz_per_process = math.ceil(bsz / device_mesh.size())
-        return item[rank * bsz_per_process:(rank + 1) * bsz_per_process]
-    else:
-        raise NotImplementedError
+    rank = device_mesh.get_local_rank()
+    bsz = len(item)
+    bsz_per_process = math.ceil(bsz / device_mesh.size())
+    return item[rank * bsz_per_process:(rank + 1) * bsz_per_process]
 
-def all_gather(item, device_mesh):
+def all_gather_list(item, device_mesh):
 
-    if isinstance(item, dict):
-        return {
-            k: all_gather(v, device_mesh)
-            for k, v in item.items()
-        }
-    elif isinstance(item, list):
-        all_lists = [None for _ in range(device_mesh.size())]
-        dist.all_gather_object(all_lists, item, group=device_mesh.get_group())
-        return sum(all_lists, [])
-    else:
-        raise NotImplementedError
+    all_lists = [None for _ in range(device_mesh.size())]
+    dist.all_gather_object(all_lists, item, group=device_mesh.get_group())
+    return sum(all_lists, [])
     
 def accumulate_to_eos(
     value: torch.Tensor,
     eos_mask: torch.Tensor
 ) -> torch.Tensor:
+    # Example:
+    #   - value: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+    #   - eos_mask: [0, 0, 1, 0, 1, 0, 1]
+    #   - output: [0.0, 0.0, 0.6, 0.0, 0.9, 0.0, 1.3]
     
     end_indices = torch.where(eos_mask)[1]
     start_indices = torch.cat((
-        torch.LongTensor([0]).to(torch.cuda.current_device()),
+        torch.LongTensor([0]).to(end_indices.device),
         end_indices[:-1] + 1
     ))
 
@@ -69,8 +57,12 @@ def compute_kl_term(
     kl_estimator: str,
     eos_mask: Optional[torch.Tensor]=None
 ) -> torch.Tensor:
+    # The (ref_)logps of non-action tokens are zero (see `Actor.
+    # forward`), so their corresponding kl_term will also be zero.
     
     if eos_mask is not None:
+        # If eos_mask is provided, we firstly compute the logp of 
+        # the sequence. This corresponds to `kl_level=sequence`.
         logps = accumulate_to_eos(logps, eos_mask)
         ref_logps = accumulate_to_eos(logps, eos_mask)
 
@@ -84,7 +76,8 @@ def compute_kl_term(
     else:
         raise NotImplementedError
 
-# Adapted from veRL
+# The following code is adapted from veRL
+# TODO: add licence
 
 from typing import List, Tuple
 import os

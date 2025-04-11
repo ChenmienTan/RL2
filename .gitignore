@@ -123,6 +123,7 @@ dmypy.json
 Thumbs.db
 ehthumbs.db
 
+outputs/
 wandb/
 core-*
 nohup.out

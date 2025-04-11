@@ -1,4 +1,5 @@
 from typing import List, Dict
+import time
 import math
 import torch
 import torch.distributed as dist
@@ -12,12 +13,35 @@ from utils import (
     get_auto_wrap_policy,
     get_seqlen_balanced_partitions,
     offload_fsdp_model_to_cpu,
-    load_fsdp_model_to_gpu
+    load_fsdp_model_to_gpu,
+    offload_fsdp_optimizer,
+    load_fsdp_optimizer
 )
+
+
+class TimeMemoryLogger:
+
+    def __init__(self, device_mesh, op):
+        self.device_mesh = device_mesh
+        self.op = op
+
+    def __enter__(self):
+        self.start_time = time.time()
+        start_memory = torch.cuda.memory_allocated() / (1024 ** 3)
+        if self.device_mesh.get_rank() == 0:
+            print(f"Before {self.op}, {round(start_memory, 1)} GB memory is occupied.")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        end_time = time.time()
+        end_memory = torch.cuda.memory_allocated() / (1024 ** 3)
+        if self.device_mesh.get_rank() == 0:
+            print(f"{self.op} takes {round(end_time - self.start_time, 1)} seconds.")
+            print(f"After {self.op}, {round(end_memory, 1)} GB memory is occupied.")
+        
 
 class Worker:
 
-    def __init__(self, config, device_mesh, train):
+    def __init__(self, config, device_mesh, train: bool):
 
         self.config = config
         self.device_mesh = device_mesh
@@ -58,7 +82,27 @@ class Worker:
                 weight_decay=self.config.weight_decay
             )
 
-        offload_fsdp_model_to_cpu(self.model)
+        self.offload_model_to_cpu()
+
+    def offload_model_to_cpu(self):
+        if self.config.offload_model:
+            with TimeMemoryLogger(self.device_mesh, "offloading model to cpu"):
+                offload_fsdp_model_to_cpu(self.model)
+    
+    def load_model_to_gpu(self):
+        if self.config.offload_model:
+            with TimeMemoryLogger(self.device_mesh, "loading model to cpu"):
+                load_fsdp_model_to_gpu(self.model)
+
+    def offload_optimizer_to_cpu(self):
+        if self.config.offload_optimizer:
+            with TimeMemoryLogger(self.device_mesh, "offloading optimizer to cpu"):
+                offload_fsdp_optimizer(self.optimizer)
+
+    def load_optimizer_to_gpu(self):
+        if self.config.offload_optimizer:
+            with TimeMemoryLogger(self.device_mesh, "loading optimizer to cpu"):
+                load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
 
     def pack_data_list_to_minibatches(self, data_list: List[Dict[str, torch.Tensor]], train: bool) -> List[Dict[str, torch.Tensor]]:
 
@@ -70,12 +114,14 @@ class Worker:
             )
         )
         # At least n_minibatches minibatches are needed.
-        # SP is used to shard cached activations, which is unnecessary at 
-        # inference. Every dp should has identical number of minibatches, 
-        # thus the total number of minibatches must be a multiple of world 
-        # size. Additinally, at training, the number of minibatches on each 
-        # dp must be a multiple of updates so that they can be evenly devided 
-        # into multiple batches, with each being used for an update.
+        # SP is used to shard cached activations, which is 
+        # unnecessary at inference. Every dp should has identical 
+        # number of minibatches, thus the total number of 
+        # minibatches must be a multiple of world size. 
+        # Additinally, at training, the number of minibatches on 
+        # each dp must be a multiple of updates so that they can 
+        # be evenly devided into multiple batches, with each being 
+        # used for an update.
         multiple_of = self.sp_device_mesh["dp"].size() * self.config.update_per_rollout if train else self.device_mesh.size()
         if n_minibatches % multiple_of != 0:
             n_minibatches += (multiple_of - n_minibatches % multiple_of)
@@ -84,16 +130,18 @@ class Worker:
             seq_len_list, k_partitions=n_minibatches, equal_size=False
         )
         self.shuffle_indices = sum(partitions, [])
-        # record for `resume_minibatches_to_data_list`
-        rank = self.sp_device_mesh["dp"].get_local_rank() if train else self.device_mesh.rank()
-        n_minibatch_per_process = n_minibatches / (
+        # cache this for `resume_minibatches_to_data_list`
+        rank = self.sp_device_mesh["dp"].get_local_rank() if train else self.device_mesh.get_rank()
+        n_minibatch_per_process = n_minibatches // (
             self.sp_device_mesh["dp"].size() if train else self.device_mesh.size()
         )
         partitions = partitions[rank * n_minibatch_per_process:(rank + 1) * n_minibatch_per_process]
 
         return [
             {   
-                k: torch.cat([data_list[p][k] for p in partition], -1).to(torch.cuda.current_device())
+                k: torch.cat(
+                    [data_list[p][k] for p in partition],
+                -1).to(torch.cuda.current_device())
                 for k in data_list[0].keys()
             }
             for partition in partitions
@@ -129,9 +177,13 @@ class Worker:
             for update in range(self.config.update_per_rollout)
         ]
 
-    def log(self, metrics: dict, step: int):
+    def log(self, metrics: Dict[str, List], step: int):
 
-        metrics = all_gather(metrics, self.device_mesh)
+        metrics = {
+            k: all_gather(v, self.device_mesh)
+            for k, v in metrics.items()
+        }
+        
         if self.device_mesh.get_rank() == 0:
             wandb.log(
                 {
@@ -140,9 +192,9 @@ class Worker:
                 }, step=step    
             )
 
-    def save(self):
+    def save(self, path):
 
-        load_fsdp_model_to_gpu(self.model) # or the params cannot be summoned
+        self.load_model_to_gpu()
         with FSDP.summon_full_params(
             self.model,
             offload_to_cpu=True,
@@ -150,6 +202,5 @@ class Worker:
             writeback=False
         ):
             if self.device_mesh.get_rank() == 0:
-                self.tokenizer.save_pretrained(f"{self.args.save_path}/{self.args.experiment_name}/step{self.args.step}")
-                self.model.module.save_pretrained(f"{self.args.save_path}/{self.args.experiment_name}/step{self.args.step}")
-        offload_fsdp_model_to_cpu(self.model)
+                self.model.save_pretrained(path)
+        self.offload_model_to_cpu()

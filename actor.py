@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 import importlib.util
 import torch
 import torch.distributed as dist
@@ -8,19 +8,30 @@ from vllm import LLM, SamplingParams
 from tqdm import tqdm
 from worker import Worker
 from utils import (
-    all_gather,
-    dispatch,
-    compute_kl_term,
-    offload_fsdp_model_to_cpu,
-    offload_fsdp_optimizer,
-    load_fsdp_model_to_gpu,
-    load_fsdp_optimizer
+    all_gather_list,
+    dispatch_list,
+    compute_kl_term
 )
+
+class RolloutRngStateManager:
+
+    def __init__(self, device_mesh):
+
+        self.original_rng_state = torch.cuda.get_rng_state()
+        torch.cuda.manual_seed(device_mesh.get_local_rank())
+        self.rollout_rng_state = torch.cuda.get_rng_state()
+        torch.cuda.set_rng_state(self.original_rng_state)
+
+    def __enter__(self):
+        torch.cuda.set_rng_state(self.rollout_rng_state)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        torch.cuda.set_rng_state(self.original_rng_state)
 
 
 class Actor(Worker):
 
-    def __init__(self, config, device_mesh, train):
+    def __init__(self, config, device_mesh, train: bool):
         super().__init__(config, device_mesh, train)
         
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -55,15 +66,14 @@ class Actor(Worker):
             distributed_executor_backend="external_launcher",
             # SPMD, see https://github.com/vllm-project/vllm/issues/11400
             gpu_memory_utilization=self.config.rollout.gpu_memory_utilization,
-            enable_sleep_mode=True
+            enable_sleep_mode=True,
+            seed=self.rollout_device_mesh["dp"].get_local_rank()
         )
 
-        self.original_rng_state = torch.cuda.get_rng_state()
-        torch.cuda.manual_seed(self.rollout_device_mesh["dp"].get_local_rank())
-        self.rollout_rng_state = torch.cuda.get_rng_state()
-        torch.cuda.set_rng_state(self.original_rng_state)
+        self.rollout_rng_state_manager = RolloutRngStateManager(self.rollout_device_mesh["dp"])
 
         self.train_sampling_params = SamplingParams(
+            n=self.config.rollout.rollout_per_prompt,
             temperature=self.config.rollout.train_temperature,
             max_tokens=self.config.rollout.max_response_length
         )
@@ -72,37 +82,67 @@ class Actor(Worker):
             max_tokens=self.config.rollout.max_response_length
         )
 
-    def rollout(self, data_list, train, step):
+    def rollout(self, data_list: List[Dict], train: bool, step: int) -> Optional[List[Dict[str, torch.Tensor]]]:
 
-        data_list = all_gather(data_list, self.rollout_device_mesh["tp"])
+        data_list = all_gather_list(data_list, self.rollout_device_mesh["tp"])
+        # Shard inference engines share identical data.
 
-        # TODO: context manager
-        self.set_rng_state(self.rollout_rng_state)
-        responses = self.llm.generate(
-            [ex["prompt"] for ex in data_list],
-            sampling_params=self.train_sampling_params if train else self.test_sampling_params,
-            use_tqdm=(self.device_mesh.get_rank() == 0)
-        )
-        self.set_rng_state(self.original_rng_state)
+        with self.rollout_rng_state_manager:
+            responses = self.llm.generate(
+                [ex["prompt"] for ex in data_list],
+                sampling_params=self.train_sampling_params if train else self.test_sampling_params,
+                use_tqdm=(self.device_mesh.get_rank() == 0)
+            )
 
         if train:
+            # If test, llm will soon be called again. See `Trainer.train`.
             self.llm.sleep()
 
-        for ex, response in zip(data_list, responses):
-            ex.update({
-                "response": response.outputs[0].text,
-                "response_id": list(response.outputs[0].token_ids)
-            })
+        data_list = [
+            {
+                "response": output.text,
+                "response_id": list(output.token_ids),
+                **ex
+            }
+            for ex, response in zip(data_list, responses)
+            for output in response.outputs
+        ]
 
-        data_list = dispatch(data_list, self.rollout_device_mesh["tp"])
+        data_list = dispatch_list(data_list, self.rollout_device_mesh["tp"])
+        # Each device grades its respective data to avoid duplicate computation.
 
         for ex in data_list:
             ex["reward"] = self.reward_fn(ex["response"], ex["answer"])
+        # Only support outcome reward. RM should be served remotely if there is
 
         self.log({f"reward/{'train' if train else 'test'}": [ex["reward"] for ex in data_list]}, step)
 
-        return data_list
+        if train:
 
+            hf_data_list = []
+            for ex in data_list:
+
+                prompt_id = ex["prompt_id"]
+                response_id = ex["response_id"]
+                reward = ex["reward"]
+
+                states = prompt_id + response_id[:-1]
+                actions = (len(prompt_id) - 1) * [0] + response_id
+                rewards = (len(prompt_id) + len(response_id) - 2) * [0] + [reward]
+                position_ids = list(range(len(prompt_id) + len(response_id) - 1))
+                action_mask = (len(prompt_id) - 1) * [0] + len(response_id) * [1]
+                eos_mask = (len(prompt_id) + len(response_id) - 2) * [0] + [1]
+
+                data_list.append({
+                    "states": torch.LongTensor([states]),
+                    "actions": torch.LongTensor([actions]),
+                    "rewards": torch.FloatTensor([rewards]),
+                    "position_ids": torch.LongTensor([position_ids]),
+                    "action_mask": torch.LongTensor([action_mask]),
+                    "eos_mask": torch.LongTensor([eos_mask])
+                })
+
+            return all_gather_list(data_list, self.device_mesh)
 
     def forward(self, minibatch: Dict[str, torch.Tensor]) -> torch.Tensor:
 
@@ -119,9 +159,9 @@ class Actor(Worker):
         ).squeeze(-1) * minibatch["action_mask"]
 
     @torch.no_grad()
-    def compute_logps(self, data_list, step:int):
-        load_fsdp_model_to_gpu(self.model)
-        minibatches = self.pack_data_to_minibatches(data_list, False)
+    def compute_logps(self, data_list: List[Dict[str, torch.Tensor]], step: int) -> List[Dict[str, torch.Tensor]]:
+        self.load_model_to_gpu()
+        minibatches = self.pack_data_list_to_minibatches(data_list, False)
 
         prefix = "old" if self.train else "ref"
         self.model.eval()
@@ -130,34 +170,58 @@ class Actor(Worker):
             if self.device_mesh.get_rank() == 0 else minibatches
         ):
             minibatch[f"{prefix}_logps"] = self.forward(minibatch)
-            
-        offload_fsdp_model_to_cpu(self.model)
+
+            if not self.train and self.config.kl.type == "reward":
+                kl_term = compute_kl_term(
+                    minibatch["old_logps"], minibatch["ref_logps"],
+                    self.config.kl.estimator,
+                    minibatch["eos_mask"]
+                    if self.config.kl.level == "sequence"
+                    else None               
+                )  # TODO: log KL
+                minibatch["rewards"] -= self.config.kl.coef * kl_term
+        
+        self.offload_model_to_cpu()
         return self.resume_minibatches_to_data_list(minibatches) 
 
-    def update(self, data_list, step):
-        load_fsdp_model_to_gpu(self.model)
-        load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
+    def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
+        self.load_model_to_gpu()
+        self.load_optimizer_to_gpu()
         minibatches = self.pack_data_list_to_minibatches(data_list, True)
         batches = self.group_minibatches_into_batches(minibatches)
 
         self.model.train()
-        losses, grad_norms = [], []
+        losses, clip_ratios, grad_norms = [], [], []
+        tbar = tqdm(total=len(minibatches), desc=f"Step {step + 1}, update actor")
         for batch in batches:
             
-            total_actions = sum([minibatch["action_mask"].sum() for minibatch in batch])
-            total_sequences = sum([(minibatch["eos_mask"]).sum() for minibatch in batch])
+            total_actions = sum(all_gather_list(
+                [sum([
+                    minibatch["action_mask"].sum()
+                    for minibatch in batch
+                ])],
+            self.device_mesh))
+            total_sequences = sum(all_gather_list(
+                [sum([
+                    minibatch["eos_mask"].sum()
+                    for minibatch in batch
+                ])],
+            self.device_mesh))
+            
             for minibatch in batch:
 
                 logps = self.forward(minibatch)
                 ratio = (logps - minibatch["old_logps"]).exp()
-                cliped_ratio = torch.clamp(
+                clipped_ratio = torch.clamp(
                     ratio,
                     1 - self.config.epsilon_clip,
                     1 + self.config.epsilon_clip
                 )
-                loss = - torch.min(minibatch["advantages"] * ratio, minibatch["advantages"] * cliped_ratio).sum() / total_actions
+                objective = minibatch["advantages"] * ratio
+                clipped_objective = minibatch["advantages"] * clipped_ratio
+                loss = - torch.min(objective, clipped_objective).sum() / total_actions
+                clip_ratio = (objective > clipped_objective).sum() / total_actions
 
-                # TODO: log cliped_ratio
                 if self.config.kl.type == "loss":
                     
                     kl_term = compute_kl_term(
@@ -167,8 +231,15 @@ class Actor(Worker):
                     kl_loss = - self.config.kl.coef * kl_term.sum() / (total_actions if self.config.kl.level == "token" else total_sequences)
                     loss = loss + kl_loss
 
-                loss.backward()
-                losses.append(loss.item()) # TODO: first sum then avg
+                loss.backward()         
+                losses.append(self.device_mesh.size() * len(batch) * loss.item())
+                # The losses on different data processes (resp. of 
+                # minibatches within a batch) are accumulated but the 
+                # value will be averaged in `Worker.log`. Therefore 
+                # we multiply the world size (resp. bsz) here to get 
+                # the correct value.
+                clip_ratios.append(self.device_mesh.size() * len(batch) * clip_ratio.item())
+                tbar.update()
 
             grad_norm = self.model.clip_grad_norm_(self.config.max_grad_norm)
             grad_norms.append(grad_norm.item())
@@ -177,13 +248,14 @@ class Actor(Worker):
 
         self.log({
             "actor/loss": losses,
+            "actor/clip_ratio": clip_ratios,
             "actor/grad_norm": grad_norms
         }, step)
 
-        offload_fsdp_optimizer(self.optimizer)
+        self.offload_optimizer_to_cpu()
         with FSDP.summon_full_params(self.model, offload_to_cpu=True):
             state_dict = self.model.state_dict()
-        offload_fsdp_model_to_cpu(self.model)
+        self.offload_model_to_cpu()
         # offload params here, or params cannot be summoned
         torch.cuda.empty_cache() # or llm.wake_up() will OOM
         self.llm.wake_up() # upload inference engine to GPU

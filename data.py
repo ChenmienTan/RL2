@@ -1,6 +1,5 @@
 from typing import Tuple, Dict, List
 import json
-import uuid
 from torch.utils.data import Dataset
 
 class RLDataset(Dataset):
@@ -9,8 +8,7 @@ class RLDataset(Dataset):
         self,
         data_path,
         tokenizer,
-        max_length,
-        rollout_per_prompt
+        max_length
     ):
 
         with open(data_path, "r") as f:
@@ -18,7 +16,6 @@ class RLDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.tokenizer.trauncation_side = "left"
-        self.rollout_per_prompt = rollout_per_prompt
         
     def __len__(self):
         return len(self.dataset)
@@ -26,7 +23,8 @@ class RLDataset(Dataset):
     def __getitem__(self, idx):
 
         ex = self.dataset[idx]
-        message = ex["message"]
+        # message = ex["message"]
+        message = [{"role": "user", "content": ex["prompt"]}]
         answer = ex["answer"]
 
         prompt = self.tokenizer.apply_chat_template(
@@ -47,4 +45,4 @@ class RLDataset(Dataset):
         }
 
     def collate_fn(self, data_tuple: Tuple[Dict]) -> List[Dict]:
-        return sum([self.rollout_per_prompt * [ex] for ex in data_tuple], [])
+        return list(data_tuple)
