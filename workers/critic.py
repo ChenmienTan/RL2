@@ -1,15 +1,12 @@
 from typing import Dict, List
+from collections import defaultdict
+from contextlib import nullcontext
 import torch
 from transformers import AutoModelForTokenClassification
 from tqdm import tqdm
-from worker import Worker
-from utils import (
-    all_gather_list,
-    load_fsdp_model_to_gpu,
-    load_fsdp_optimizer,
-    offload_fsdp_model_to_cpu,
-    offload_fsdp_optimizer
-)
+from workers.base import Worker
+from utils.ring_attn import RingAttnManager
+from utils.comm import sum_across_processes
 
 
 class Critic(Worker):
@@ -33,7 +30,11 @@ class Critic(Worker):
         ).logits.squeeze(-1) * minibatch["action_mask"]
 
     @torch.no_grad()
-    def compute_values(self, data_list: List[Dict[str, torch.Tensor]], step: int) -> List[Dict[str, torch.Tensor]]:
+    def compute_values(
+        self,
+        data_list: List[Dict[str, torch.Tensor]],
+        step: int
+    ) -> List[Dict[str, torch.Tensor]]:
         self.load_model_to_gpu()
         minibatches = self.pack_data_list_to_minibatches(data_list, False)
 
@@ -45,7 +46,7 @@ class Critic(Worker):
             minibatch["values"] = self.forward(minibatch)
         
         # No need to offload model because it will be updated soon. See `Trainer.train`.
-        return self.resume_minibatches_to_data_list(minibatches)
+        return self.resume_data_list_from_minibatches(minibatches)
 
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
         # Model has been loaded in `compute_values`.
@@ -54,45 +55,41 @@ class Critic(Worker):
         batches = self.group_minibatches_into_batches(minibatches)
 
         self.model.train()
-        losses, clip_ratios, grad_norms = [], [], []
+        metrics = defaultdict(list)
         tbar = tqdm(total=len(minibatches), desc=f"Step {step + 1}, update critic")
         for batch in batches:
 
-            total_actions = sum(all_gather_list(
-                [sum([
-                    minibatch["action_mask"].sum()
-                    for minibatch in batch
-                ])],
-            self.device_mesh))
+            total_actions = sum_across_processes(
+                sum([minibatch["action_mask"].sum() for minibatch in batch])
+            )
 
             for minibatch in batch:
-
-                values = self.forward(minibatch)
-                cliped_values = torch.clamp(
+                with (
+                    RingAttnManager(self.sp_device_mesh["sp"], minibatch["seqlens"])
+                    if self.sp_device_mesh["sp"].size() > 1 else nullcontext()
+                ):
+                    values = self.forward(minibatch)
+                clipped_values = torch.clamp(
                     values,
-                    minibatch["values"] - self.config.value_clip,
-                    minibatch["values"] + self.config.value_clip
+                    minibatch["values"] - self.config.clip,
+                    minibatch["values"] + self.config.clip
                 )
                 mse = (values - minibatch["returns"]).pow(2)
-                clipped_mse = (cliped_values - minibatch["returns"]).pow(2)
+                clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
                 loss = torch.max(mse, clipped_mse).sum() / total_actions
                 clip_ratio = (mse < clipped_mse).sum() / total_actions
 
                 loss.backward()
-                losses.append(self.device_mesh.size() * len(batch) * loss.item())
-                clip_ratios.append(self.device_mesh.size() * len(batch) * clip_ratio.item())
+                metrics["critic/loss"].append(self.device_mesh.size() * len(batch) * loss.item())
+                metrics["critic/clip_ratio"].append(self.device_mesh.size() * len(batch) * clip_ratio.item())
                 tbar.update()
 
             grad_norm = self.model.clip_grad_norm_(self.config.max_grad_norm)
-            grad_norms.append(grad_norm.item())
+            metrics["critic/grad_norm"].append(grad_norm.item())
             self.optimizer.step()
             self.optimizer.zero_grad()
 
-        self.log({
-            "critic/loss": losses,
-            "critic/clip_ratio": clip_ratios,
-            "critic/grad_norm": grad_norms
-        }, step)
+        self.log(metrics, step)
 
         self.offload_model_to_cpu()
         self.offload_optimizer_to_cpu()

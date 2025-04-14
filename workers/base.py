@@ -8,15 +8,15 @@ from torch.distributed.fsdp import (
     MixedPrecision
 )
 import wandb
-from utils import (
-    all_gather,
-    get_auto_wrap_policy,
-    get_seqlen_balanced_partitions,
+from utils.fsdp import (
+    get_fsdp_wrap_policy,
     offload_fsdp_model_to_cpu,
     load_fsdp_model_to_gpu,
     offload_fsdp_optimizer,
     load_fsdp_optimizer
 )
+from utils.seq import get_seqlen_balanced_partitions
+from utils.comm import concat_across_processes
 
 
 class TimeMemoryLogger:
@@ -29,14 +29,14 @@ class TimeMemoryLogger:
         self.start_time = time.time()
         start_memory = torch.cuda.memory_allocated() / (1024 ** 3)
         if self.device_mesh.get_rank() == 0:
-            print(f"Before {self.op}, {round(start_memory, 1)} GB memory is occupied.")
+            print(f"Before {self.op}, {round(start_memory, 1)} GB memory is allocated.")
 
     def __exit__(self, exc_type, exc_value, traceback):
         end_time = time.time()
         end_memory = torch.cuda.memory_allocated() / (1024 ** 3)
         if self.device_mesh.get_rank() == 0:
             print(f"{self.op} takes {round(end_time - self.start_time, 1)} seconds.")
-            print(f"After {self.op}, {round(end_memory, 1)} GB memory is occupied.")
+            print(f"After {self.op}, {round(end_memory, 1)} GB memory is allocated.")
         
 
 class Worker:
@@ -59,7 +59,7 @@ class Worker:
         if self.train and self.config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        auto_wrap_policy = get_auto_wrap_policy(self.model)
+        auto_wrap_policy = get_fsdp_wrap_policy(self.model)
 
         mixed_precision = MixedPrecision(
             param_dtype=torch.bfloat16,
@@ -104,7 +104,11 @@ class Worker:
             with TimeMemoryLogger(self.device_mesh, "loading optimizer to cpu"):
                 load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
 
-    def pack_data_list_to_minibatches(self, data_list: List[Dict[str, torch.Tensor]], train: bool) -> List[Dict[str, torch.Tensor]]:
+    def pack_data_list_to_minibatches(
+        self,
+        data_list: List[Dict[str, torch.Tensor]],
+        train: bool
+    ) -> List[Dict[str, torch.Tensor]]:
 
         seq_len_list = [ex["states"].shape[-1] for ex in data_list]
         n_minibatches = math.ceil(
@@ -133,22 +137,48 @@ class Worker:
         # cache this for `resume_minibatches_to_data_list`
         rank = self.sp_device_mesh["dp"].get_local_rank() if train else self.device_mesh.get_rank()
         n_minibatch_per_process = n_minibatches // (
-            self.sp_device_mesh["dp"].size() if train else self.device_mesh.size()
+            self.sp_device_mesh["dp"].size()
+            if train else self.device_mesh.size()
         )
         partitions = partitions[rank * n_minibatch_per_process:(rank + 1) * n_minibatch_per_process]
 
-        return [
-            {   
-                k: torch.cat(
-                    [data_list[p][k] for p in partition],
-                -1).to(torch.cuda.current_device())
-                for k in data_list[0].keys()
-            }
-            for partition in partitions
-        ]
+        multiple_of = 2 * self.sp_device_mesh["sp"].size()
+        rank = self.sp_device_mesh["sp"].get_local_rank()
+        minibatches = []
+        for partition in partitions:
+            minibatch = {}
+            for k in data_list[0].keys():
+                tensors = []
+                for p in partition:
+                    tensor = data_list[p][k]
+                    if train and self.sp_device_mesh["sp"].size() > 1:
+                        # When using ring attention.
+                        # See https://zhuanlan.zhihu.com/p/683714620.
+                        if tensor.shape[-1] % multiple_of != 0:
+                            padding_tokens = multiple_of - tensor.shape[-1] % multiple_of
+                            tensor = torch.cat(
+                                (tensor, torch.zeros((1, padding_tokens), dtype=tensor.dtype)),
+                            -1)
+                        half_seqlen = tensor.shape[-1] // multiple_of
+                        tensor = torch.cat(
+                            (
+                                tensor[:, rank * half_seqlen:(rank + 1) * half_seqlen],
+                                tensor[:, -(rank + 1) * half_seqlen:- rank * half_seqlen]
+                            ),
+                        -1)
+                    tensors.append(tensor)
+                minibatch[k] = torch.cat(tensors, -1).to(torch.cuda.current_device())
+            if train:
+                minibatch["seqlens"] = torch.IntTensor([tensor.shape[-1] for tensor in tensors]).to(torch.cuda.current_device())
+            minibatches.append(minibatch)
+
+        return minibatch
     
-    def resume_minibatches_to_data_list(self, minibatches: List[Dict[str, torch.Tensor]]) -> List[Dict[str, torch.Tensor]]:
-        
+    def resume_data_list_from_minibatches(
+        self,
+        minibatches: List[Dict[str, torch.Tensor]]
+    ) -> List[Dict[str, torch.Tensor]]:
+
         shuffled_data_list = []
         for minibatch in minibatches:
             end_indices = torch.where(minibatch["eos_mask"])[1]
@@ -162,14 +192,17 @@ class Worker:
                     for k, v in minibatch.items()
                 })
         
-        shuffled_data_list = all_gather(shuffled_data_list, self.device_mesh)
+        shuffled_data_list = concat_across_processes(shuffled_data_list, self.device_mesh)
         data_list = [None for _ in range(len(shuffled_data_list))]
         for idx, data in zip(self.shuffle_indices, shuffled_data_list):
             data_list[idx] = data
 
         return data_list
 
-    def group_minibatches_into_batches(self, minibatches: List[Dict[str, torch.Tensor]]) -> List[List[Dict[str, torch.Tensor]]]:
+    def group_minibatches_into_batches(
+        self,
+        minibatches: List[Dict[str, torch.Tensor]]
+    ) -> List[List[Dict[str, torch.Tensor]]]:
 
         n_minibatches_per_update = len(minibatches) // self.config.update_per_rollout
         return [ # TODO: perhaps rank them
@@ -180,7 +213,7 @@ class Worker:
     def log(self, metrics: Dict[str, List], step: int):
 
         metrics = {
-            k: all_gather(v, self.device_mesh)
+            k: concat_across_processes(v, self.device_mesh)
             for k, v in metrics.items()
         }
         

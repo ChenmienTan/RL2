@@ -9,10 +9,8 @@ import transformers
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from ring_flash_attn.zigzag_ring_flash_attn_varlen import zigzag_ring_flash_attn_varlen_func
 from ring_flash_attn.adapters.hf_adapter import flash_attention_forward
-
-DATA_PARAMS = {}
-
-def get_flash_attention_forward(process_group):
+    
+def get_ring_flash_attn(process_group, cu_seqlens, max_seqlen):
 
     def _flash_attention_forward(
         query_states: torch.Tensor,
@@ -53,6 +51,7 @@ def get_flash_attention_forward(process_group):
                 deterministic = (
                     os.environ.get("FLASH_ATTENTION_DETERMINISTIC", "0") == "1"
                 )
+
         flash_kwargs["deterministic"] = deterministic
         flash_kwargs["group"] = process_group
 
@@ -60,17 +59,41 @@ def get_flash_attention_forward(process_group):
             query_states.squeeze(0), 
             key_states.squeeze(0),
             value_states.squeeze(0),
-            cu_seqlens=DATA_PARAMS["cu_seqlens"],
-            max_seqlen=DATA_PARAMS["max_seqlen"],
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
             dropout_p=dropout,
             softmax_scale=softmax_scale,
             causal=True,
             **flash_kwargs
         )
-
+    
     return _flash_attention_forward
 
-def prepare_ring_attn(process_group):
 
-    transformers.modeling_flash_attention_utils._flash_attention_forward = get_flash_attention_forward(process_group)
-    ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
+class RingAttnManager:
+
+    def __init__(self, device_mesh, seqlens: torch.Tensor):
+
+        self.device_mesh = device_mesh
+        self.cu_seqlens = torch.cumsum(
+            torch.cat((
+                torch.IntTensor([0]).to(torch.cuda.current_device()),
+                seqlens
+            )),
+            0
+        )
+        self.max_seqlen = seqlens.max().item()
+
+    def __enter__(self):
+        
+        self.original_flash_attn = ALL_ATTENTION_FUNCTIONS["flash_attention_2"]
+        transformers.modeling_flash_attention_utils._flash_attention_forward = get_ring_flash_attn(
+            self.device_mesh.get_group(),
+            self.cu_seqlens,
+            self.max_seqlen
+        )
+        ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
+
+    def __exit__(self):
+
+        ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = self.original_flash_attn

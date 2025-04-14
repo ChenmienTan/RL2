@@ -10,13 +10,13 @@ actor:
   sp_size: 1
   train_max_length_per_device: 8192
   inference_max_length_per_device: 32768
-  epsilon_clip: 0.2
+  clip: 0.2
   update_per_rollout: 1
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
-  offload_model: false
-  offload_optimizer: false
+  offload_model: true
+  offload_optimizer: true
 
   rollout:
     tp_size: 1
@@ -39,19 +39,19 @@ critic:
   sp_size: 1
   train_max_length_per_device: 8192
   inference_max_length_per_device: 32768
-  value_clip: 0.5
+  clip: 0.5
   update_per_rollout: 4
   lr: 5e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
-  offload_model: false
-  offload_optimizer: false
+  offload_model: true
+  offload_optimizer: true
 
 adv:
   estimator: reinforce
   gamma: 1.0
   lamda: 1.0
-  group_norm: false
+  norm_var: false
   
 trainer:
   project: OpenReasonerZero

@@ -1,159 +1,19 @@
-from typing import Optional
-import os
-import math
-import functools
-import torch
-import torch.distributed as dist
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-
-def get_auto_wrap_policy(model):
-
-    cls_name = model._no_split_modules[0]
-    for module in model.modules():
-        if module.__class__.__name__ == cls_name:
-            wrap_cls = module.__class__
-            break
-    return functools.partial(
-        transformer_auto_wrap_policy,
-        transformer_layer_cls={wrap_cls}
-    )
-
-def dispatch_list(item, device_mesh):
-
-    rank = device_mesh.get_local_rank()
-    bsz = len(item)
-    bsz_per_process = math.ceil(bsz / device_mesh.size())
-    return item[rank * bsz_per_process:(rank + 1) * bsz_per_process]
-
-def all_gather_list(item, device_mesh):
-
-    all_lists = [None for _ in range(device_mesh.size())]
-    dist.all_gather_object(all_lists, item, group=device_mesh.get_group())
-    return sum(all_lists, [])
-    
-def accumulate_to_eos(
-    value: torch.Tensor,
-    eos_mask: torch.Tensor
-) -> torch.Tensor:
-    # Example:
-    #   - value: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-    #   - eos_mask: [0, 0, 1, 0, 1, 0, 1]
-    #   - output: [0.0, 0.0, 0.6, 0.0, 0.9, 0.0, 1.3]
-    
-    end_indices = torch.where(eos_mask)[1]
-    start_indices = torch.cat((
-        torch.LongTensor([0]).to(end_indices.device),
-        end_indices[:-1] + 1
-    ))
-
-    result = torch.zeros_like(value)
-    for start_idx, end_idx in zip(start_indices, end_indices):
-        result[0, end_idx] = value[0, start_idx:end_idx + 1].sum()
-    return result
-
-def compute_kl_term(
-    logps: torch.Tensor,
-    ref_logps: torch.Tensor,
-    kl_estimator: str,
-    eos_mask: Optional[torch.Tensor]=None
-) -> torch.Tensor:
-    # The (ref_)logps of non-action tokens are zero (see `Actor.
-    # forward`), so their corresponding kl_term will also be zero.
-    
-    if eos_mask is not None:
-        # If eos_mask is provided, we firstly compute the logp of 
-        # the sequence. This corresponds to `kl_level=sequence`.
-        logps = accumulate_to_eos(logps, eos_mask)
-        ref_logps = accumulate_to_eos(logps, eos_mask)
-
-    logp_diffs = logps - ref_logps
-    if kl_estimator == "k1":
-        return logp_diffs
-    elif kl_estimator == "k2":
-        return logp_diffs.pow(2) / 2
-    elif kl_estimator == "k3":
-        return logp_diffs + torch.exp(- logp_diffs) - 1
-    else:
-        raise NotImplementedError
-
-# The following code is adapted from veRL
-# TODO: add licence
+# Copyright 2024 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from typing import List, Tuple
-import os
 import heapq
-from datetime import timedelta
-import torch.distributed
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp._runtime_utils import _lazy_init
-
-def initialize_global_process_group(timeout_second=36000):
-    
-    torch.distributed.init_process_group("nccl", timeout=timedelta(seconds=timeout_second))
-    local_rank = int(os.environ["LOCAL_RANK"])
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-
-    if torch.distributed.is_initialized():
-        torch.cuda.set_device(local_rank)
-    return local_rank, rank, world_size
-
-@torch.no_grad()
-def offload_fsdp_model_to_cpu(model: FSDP, empty_cache: bool = True):
-    assert isinstance(model, FSDP)
-    # lazy init FSDP model
-    _lazy_init(model, model)
-    assert model._is_root, f"Only support root model offloading to CPU"
-    for handle in model._all_handles:
-        if handle._offload_params:
-            continue
-        flat_param = handle.flat_param
-        assert flat_param.data.data_ptr() == flat_param._local_shard.data_ptr() and \
-            id(flat_param.data) != id(flat_param._local_shard) and \
-            flat_param.data.size() == flat_param._local_shard.size()
-        handle.flat_param_to(torch.device("cpu"), non_blocking=True)
-        # the following still keeps id(._local_shard) != id(.data)
-        flat_param._local_shard = flat_param.data
-        assert id(flat_param._local_shard) != id(flat_param.data)
-    if empty_cache:
-        torch.cuda.empty_cache()
-
-@torch.no_grad()
-def load_fsdp_model_to_gpu(model: FSDP):
-    assert isinstance(model, FSDP)
-    # lazy init FSDP model
-    _lazy_init(model, model)
-    assert model._is_root, f"Only support root model loading to GPU"
-    device_id = torch.cuda.current_device()
-    for handle in model._all_handles:
-        if handle._offload_params:
-            continue
-        flat_param = handle.flat_param
-        handle.flat_param_to(torch.device(f"cuda:{device_id}"), non_blocking=True)
-        # the following still keeps id(._local_shard) != id(.data)
-        flat_param._local_shard = flat_param.data
-
-@torch.no_grad()
-def offload_fsdp_optimizer(optimizer):
-    if not optimizer.state:
-        return
-    for param_group in optimizer.param_groups:
-        for param in param_group['params']:
-            state = optimizer.state[param]
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to("cpu", non_blocking=True)
-
-@torch.no_grad()
-def load_fsdp_optimizer(optimizer, device_id):
-    if not optimizer.state:
-        return
-    for param_group in optimizer.param_groups:
-        for param in param_group['params']:
-            state = optimizer.state[param]
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to(device_id, non_blocking=True)
 
 def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
     # see: https://en.wikipedia.org/wiki/Largest_differencing_method

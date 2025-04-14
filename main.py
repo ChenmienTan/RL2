@@ -1,34 +1,34 @@
 from typing import Dict, List
 import hydra
 from omegaconf import OmegaConf
+import os
 from torch.utils.data import DistributedSampler, DataLoader
 import torch
 import torch.distributed as dist
 from transformers import AutoTokenizer
 import wandb
-from algs import prepare_advantage_fn
 from data import RLDataset
-from actor import Actor
-from critic import Critic
-from utils import (
-    dispatch_list,
-    all_gather_list,
-    compute_kl_term,
+from workers.actor import Actor
+from workers.critic import Critic
+from algs import compute_gae, compute_reinforce_adv
+from utils.comm import (
+    concat_across_processes,
+    shard_across_processes,
     initialize_global_process_group
 )
 
 
 class Trainer:
 
-    def __init__(self, config, world_size):
+    def __init__(self, config):
 
         self.config = config
+        world_size = int(os.environ["WORLD_SIZE"])
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_shape=(world_size,)
         )
 
-        self.compute_advantages = prepare_advantage_fn()
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.model_name)
         self.sampler, self.train_dataloader = self.prepare_sampler_dataloader(
             config.data.train_data_path, True
@@ -73,7 +73,28 @@ class Trainer:
         )
 
         return sampler, dataloader
+    
+    def compute_advantages(self, data_list: List[Dict[str, torch.Tensor]]):
+        # TODO: check whether data flow is appropriate
+        shard_across_processes(data_list, self.device_mesh)
 
+        if self.config.adv.estimator == "gae":
+            compute_gae(
+                data_list,
+                self.config.adv.gamma,
+                self.config.adv.lamda
+            )
+        elif self.config.adv.estimator == "reinforce":
+            compute_reinforce_adv(
+                data_list,
+                self.config.actor.rollout.rollout_per_prompt,
+                self.config.adv.norm_var
+            )
+        else:
+            raise NotImplementedError
+
+        return concat_across_processes(data_list, self.device_mesh)
+            
     def train(self):
 
         step = 0
@@ -114,9 +135,9 @@ class Trainer:
 @hydra.main(config_path="", config_name="config", version_base=None)
 def main(config):
 
-    _, _, world_size = initialize_global_process_group()
+    initialize_global_process_group()
     
-    trainer = Trainer(config, world_size)
+    trainer = Trainer(config)
     trainer.train()
 
 if __name__ == "__main__":
