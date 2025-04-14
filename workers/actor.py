@@ -106,7 +106,8 @@ class Actor(Worker):
 
         if train:
             # If test, llm will soon be called again. See `Trainer.train`.
-            self.llm.sleep()
+            self.llm.sleep() # TODO: perhaps level=2
+            torch.cuda.empty_cache()
 
         data_list = [
             {

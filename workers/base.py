@@ -86,22 +86,22 @@ class Worker:
 
     def offload_model_to_cpu(self):
         if self.config.offload_model:
-            with TimeMemoryLogger(self.device_mesh, "offloading model to cpu"):
+            with TimeMemoryLogger(self.device_mesh, "offloading model to CPU"):
                 offload_fsdp_model_to_cpu(self.model)
     
     def load_model_to_gpu(self):
         if self.config.offload_model:
-            with TimeMemoryLogger(self.device_mesh, "loading model to cpu"):
+            with TimeMemoryLogger(self.device_mesh, "loading model to GPU"):
                 load_fsdp_model_to_gpu(self.model)
 
     def offload_optimizer_to_cpu(self):
         if self.config.offload_optimizer:
-            with TimeMemoryLogger(self.device_mesh, "offloading optimizer to cpu"):
+            with TimeMemoryLogger(self.device_mesh, "offloading optimizer to CPU"):
                 offload_fsdp_optimizer(self.optimizer)
 
     def load_optimizer_to_gpu(self):
         if self.config.offload_optimizer:
-            with TimeMemoryLogger(self.device_mesh, "loading optimizer to cpu"):
+            with TimeMemoryLogger(self.device_mesh, "loading optimizer to GPU"):
                 load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
 
     def pack_data_list_to_minibatches(
@@ -172,7 +172,7 @@ class Worker:
                 minibatch["seqlens"] = torch.IntTensor([tensor.shape[-1] for tensor in tensors]).to(torch.cuda.current_device())
             minibatches.append(minibatch)
 
-        return minibatch
+        return minibatches
     
     def resume_data_list_from_minibatches(
         self,

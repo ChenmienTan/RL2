@@ -25,8 +25,13 @@ def concat_across_processes(item, device_mesh):
     dist.all_gather_object(all_lists, item, group=device_mesh.get_group())
     return sum(all_lists, [])
 
-def sum_across_processes(value, device_mesh):
+def sum_across_processes(value, device_mesh=None):
 
     value = torch.Tensor([value]).to(torch.cuda.current_device())
-    dist.all_reduce(value, op=dist.ReduceOp.SUM, group=device_mesh.get_group())
+    dist.all_reduce(
+        value,
+        op=dist.ReduceOp.SUM,
+        group=device_mesh.get_group()
+        if device_mesh is not None else None
+    )
     return value.to("cpu").item()

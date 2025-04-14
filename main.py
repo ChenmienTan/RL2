@@ -76,7 +76,7 @@ class Trainer:
     
     def compute_advantages(self, data_list: List[Dict[str, torch.Tensor]]):
         # TODO: check whether data flow is appropriate
-        shard_across_processes(data_list, self.device_mesh)
+        data_list = shard_across_processes(data_list, self.device_mesh)
 
         if self.config.adv.estimator == "gae":
             compute_gae(
