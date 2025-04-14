@@ -11,11 +11,7 @@ from data import RLDataset
 from workers.actor import Actor
 from workers.critic import Critic
 from algs import compute_gae, compute_reinforce_adv
-from utils.comm import (
-    concat_across_processes,
-    shard_across_processes,
-    initialize_global_process_group
-)
+from utils.comm import initialize_global_process_group
 
 
 class Trainer:
@@ -29,6 +25,12 @@ class Trainer:
             mesh_shape=(world_size,)
         )
 
+        if config.actor.kl.coef > 0:
+            self.ref_actor = Actor(config.actor, self.device_mesh, False)
+        if config.adv.estimator == "gae":
+            self.critic = Critic(config.critic, self.device_mesh)
+        self.actor = Actor(config.actor, self.device_mesh, True)
+
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.model_name)
         self.sampler, self.train_dataloader = self.prepare_sampler_dataloader(
             config.data.train_data_path, True
@@ -36,12 +38,6 @@ class Trainer:
         _, self.test_dataloader = self.prepare_sampler_dataloader(
             config.data.test_data_path, False
         )
-
-        if config.actor.kl.coef > 0:
-            self.ref_actor = Actor(config.actor, self.device_mesh, False)
-        if config.adv.estimator == "gae":
-            self.critic = Critic(config.critic, self.device_mesh)
-        self.actor = Actor(config.actor, self.device_mesh, True)
 
         if self.device_mesh.get_rank() == 0:
             wandb.init(
@@ -59,14 +55,14 @@ class Trainer:
         )
         sampler = DistributedSampler(
             dataset,
-            num_replicas=self.device_mesh.size(),
-            rank=self.device_mesh.get_rank(),
+            num_replicas=self.actor.sp_device_mesh["dp"].size(),
+            rank=self.actor.sp_device_mesh["dp"].get_rank(),
             shuffle=train,
             drop_last=True
         )
         dataloader = DataLoader(
             dataset,
-            (self.config.data.batch_size if train else len(dataset)) // self.device_mesh.size(),
+            (self.config.data.batch_size if train else len(dataset)) // self.actor.sp_device_mesh["dp"].size(),
             # if test, pack all data in a single batch
             sampler=sampler,
             collate_fn=dataset.collate_fn
@@ -75,8 +71,6 @@ class Trainer:
         return sampler, dataloader
     
     def compute_advantages(self, data_list: List[Dict[str, torch.Tensor]]):
-        # TODO: check whether data flow is appropriate
-        data_list = shard_across_processes(data_list, self.device_mesh)
 
         if self.config.adv.estimator == "gae":
             compute_gae(
@@ -93,7 +87,7 @@ class Trainer:
         else:
             raise NotImplementedError
 
-        return concat_across_processes(data_list, self.device_mesh)
+        return data_list
             
     def train(self):
 
@@ -106,7 +100,7 @@ class Trainer:
             for data_list in self.train_dataloader:
 
                 data_list = self.actor.rollout(data_list, True, step)
-                
+
                 data_list = self.actor.compute_logps(data_list, step)
                 if self.config.actor.kl.coef > 0:
                     data_list = self.ref_actor.compute_logps(data_list, step)
@@ -114,7 +108,8 @@ class Trainer:
                 if self.config.adv.estimator == "gae":
                     data_list = self.critic.compute_values(data_list, step)
 
-                data_list = self.compute_advantages(data_list)
+                if self.device_mesh.get_rank() == 0:
+                    data_list = self.compute_advantages(data_list)
 
                 if self.config.adv.estimator == "gae":
                     self.critic.update(data_list, step)

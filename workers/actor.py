@@ -11,11 +11,8 @@ from tqdm import tqdm
 from workers.base import Worker
 from algs import compute_kl_term
 from utils.ring_attn import RingAttnManager
-from utils.comm import (
-    concat_across_processes,
-    shard_across_processes,
-    sum_across_processes
-)
+from utils.comm import gather_and_concat_list, sum_across_processes
+
 
 class RolloutRngStateManager:
 
@@ -93,9 +90,6 @@ class Actor(Worker):
         step: int
     ) -> Optional[List[Dict[str, torch.Tensor]]]:
 
-        data_list = concat_across_processes(data_list, self.rollout_device_mesh["tp"])
-        # Shard inference engines share identical data.
-
         with self.rollout_rng_state_manager:
             responses = self.llm.generate(
                 [ex["prompt"] for ex in data_list],
@@ -119,7 +113,9 @@ class Actor(Worker):
             for output in response.outputs
         ]
 
-        data_list = shard_across_processes(data_list, self.rollout_device_mesh["tp"])
+        rank = self.sp_device_mesh["sp"].get_local_rank()
+        batch_size_per_device = len(data_list) // self.sp_device_mesh["sp"].size()
+        data_list = data_list[rank * batch_size_per_device:(rank + 1) * batch_size_per_device]
         # Each device grades its respective data to avoid duplicate computation.
 
         for ex in data_list:
@@ -153,7 +149,7 @@ class Actor(Worker):
                     "eos_mask": torch.LongTensor([eos_mask])
                 })
 
-            return concat_across_processes(tensor_data_list, self.device_mesh)
+            return gather_and_concat_list(tensor_data_list, self.device_mesh)
 
     def forward(self, minibatch: Dict[str, torch.Tensor]) -> torch.Tensor:
 
@@ -176,7 +172,7 @@ class Actor(Worker):
         step: int
     ) -> List[Dict[str, torch.Tensor]]:
         self.load_model_to_gpu()
-        minibatches = self.pack_data_list_to_minibatches(data_list, False)
+        minibatches = self.scatter_and_pack_data_list(data_list, False)
 
         prefix = "old" if self.train else "ref"
         
@@ -215,12 +211,12 @@ class Actor(Worker):
             self.log(metrics, step)
 
         self.offload_model_to_cpu()
-        return self.resume_data_list_from_minibatches(minibatches) 
+        return self.resume_and_gather_data_list(minibatches) 
 
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
         self.load_model_to_gpu()
         self.load_optimizer_to_gpu()
-        minibatches = self.pack_data_list_to_minibatches(data_list, True)
+        minibatches = self.scatter_and_pack_data_list(data_list, True)
         batches = self.group_minibatches_into_batches(minibatches)
 
         self.model.train()

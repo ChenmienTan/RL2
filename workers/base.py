@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import time
 import math
 import torch
@@ -16,7 +16,7 @@ from utils.fsdp import (
     load_fsdp_optimizer
 )
 from utils.seq import get_seqlen_balanced_partitions
-from utils.comm import concat_across_processes
+from utils.comm import gather_and_concat_list
 
 
 class TimeMemoryLogger:
@@ -104,53 +104,77 @@ class Worker:
             with TimeMemoryLogger(self.device_mesh, "loading optimizer to GPU"):
                 load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
 
-    def pack_data_list_to_minibatches(
+    def scatter_and_pack_data_list(
         self,
-        data_list: List[Dict[str, torch.Tensor]],
+        data_list: Optional[List[Dict[str, torch.Tensor]]],
         train: bool
     ) -> List[Dict[str, torch.Tensor]]:
 
-        seq_len_list = [ex["states"].shape[-1] for ex in data_list]
-        n_minibatches = math.ceil(
-            sum(seq_len_list) / (
-                self.config.train_max_length_per_device * self.sp_device_mesh["sp"].size()
-                if train else self.config.inference_max_length_per_device
+        if self.device_mesh.get_rank() == 0:
+
+            seq_len_list = [ex["states"].shape[-1] for ex in data_list]
+            n_minibatches = math.ceil(
+                sum(seq_len_list) / (
+                    self.config.train_max_length_per_device * self.sp_device_mesh["sp"].size()
+                    if train else self.config.inference_max_length_per_device
+                )
             )
-        )
-        # At least n_minibatches minibatches are needed.
-        # SP is used to shard cached activations, which is 
-        # unnecessary at inference. Every dp should has identical 
-        # number of minibatches, thus the total number of 
-        # minibatches must be a multiple of world size. 
-        # Additinally, at training, the number of minibatches on 
-        # each dp must be a multiple of updates so that they can 
-        # be evenly devided into multiple batches, with each being 
-        # used for an update.
-        multiple_of = self.sp_device_mesh["dp"].size() * self.config.update_per_rollout if train else self.device_mesh.size()
-        if n_minibatches % multiple_of != 0:
-            n_minibatches += (multiple_of - n_minibatches % multiple_of)
+            # At least n_minibatches minibatches are needed.
+            # SP is used to shard cached activations, which is 
+            # unnecessary at inference. Every dp should has identical 
+            # number of minibatches, thus the total number of 
+            # minibatches must be a multiple of world size. 
+            # Additinally, at training, the number of minibatches on 
+            # each dp must be a multiple of updates so that they can 
+            # be evenly devided into multiple batches, with each being 
+            # used for an update.
+            multiple_of = self.sp_device_mesh["dp"].size() * self.config.update_per_rollout if train else self.device_mesh.size()
+            if n_minibatches % multiple_of != 0:
+                n_minibatches += (multiple_of - n_minibatches % multiple_of)
+            
+            partitions: List[List[int]] = get_seqlen_balanced_partitions(
+                seq_len_list, k_partitions=n_minibatches, equal_size=False
+            )
+            self.shuffle_indices: List[int] = sum(partitions, [])
+            # Cache this for `resume_and_gather_data_list`
+            data_list: List[List[Dict[str, torch.Tensor]]] = [
+                [data_list[p] for p in partition]
+                for partition in partitions
+            ]
+            n_minibatch_per_process = n_minibatches // (
+                self.sp_device_mesh["dp"].size()
+                if train else self.device_mesh.size()
+            )
+            data_lists: List[List[List[Dict[str, torch.Tensor]]]] = [
+                data_list[rank * n_minibatch_per_process:(rank + 1) * n_minibatch_per_process]
+                for rank in range(
+                    self.sp_device_mesh["dp"].size()
+                    if train else self.device_mesh.size()
+                )
+                for _ in range(
+                    self.sp_device_mesh["sp"].size()
+                    if train else 1
+                )
+            ]
         
-        partitions: List[List[int]] = get_seqlen_balanced_partitions(
-            seq_len_list, k_partitions=n_minibatches, equal_size=False
-        )
-        self.shuffle_indices = sum(partitions, [])
-        # cache this for `resume_minibatches_to_data_list`
-        rank = self.sp_device_mesh["dp"].get_local_rank() if train else self.device_mesh.get_rank()
-        n_minibatch_per_process = n_minibatches // (
-            self.sp_device_mesh["dp"].size()
-            if train else self.device_mesh.size()
-        )
-        partitions = partitions[rank * n_minibatch_per_process:(rank + 1) * n_minibatch_per_process]
+        else:
+            data_lists = [None for _ in range(self.device_mesh.size())]
+            
+        data_list = [None]
+        dist.scatter_object_list(data_list, data_lists, src=0)
+        data_list: List[List[Dict[str, torch.Tensor]]] = data_list[0]
 
         multiple_of = 2 * self.sp_device_mesh["sp"].size()
         rank = self.sp_device_mesh["sp"].get_local_rank()
+
         minibatches = []
-        for partition in partitions:
+        for data in data_list:
             minibatch = {}
-            for k in data_list[0].keys():
+            for k in data[0].keys():
                 tensors = []
-                for p in partition:
-                    tensor = data_list[p][k]
+                for ex in data:
+                    tensor = ex[k]
+
                     if train and self.sp_device_mesh["sp"].size() > 1:
                         # When using ring attention.
                         # See https://zhuanlan.zhihu.com/p/683714620.
@@ -166,20 +190,23 @@ class Worker:
                                 tensor[:, -(rank + 1) * half_seqlen:- rank * half_seqlen]
                             ),
                         -1)
+
                     tensors.append(tensor)
                 minibatch[k] = torch.cat(tensors, -1).to(torch.cuda.current_device())
-            if train:
-                minibatch["seqlens"] = torch.IntTensor([tensor.shape[-1] for tensor in tensors]).to(torch.cuda.current_device())
+            if train and self.sp_device_mesh["sp"].size() > 1:
+                minibatch["seqlens"] = torch.IntTensor(
+                    [tensor.shape[-1] for tensor in tensors]
+                ).to(torch.cuda.current_device())
             minibatches.append(minibatch)
 
         return minibatches
     
-    def resume_data_list_from_minibatches(
+    def resume_and_gather_data_list(
         self,
         minibatches: List[Dict[str, torch.Tensor]]
-    ) -> List[Dict[str, torch.Tensor]]:
+    ) -> Optional[List[Dict[str, torch.Tensor]]]:
 
-        shuffled_data_list = []
+        data_list: List[Dict[str, torch.Tensor]] = []
         for minibatch in minibatches:
             end_indices = torch.where(minibatch["eos_mask"])[1]
             start_indices = torch.cat((
@@ -187,17 +214,23 @@ class Worker:
                 end_indices[:-1] + 1
             ))
             for start_idx, end_idx in zip(start_indices, end_indices):
-                shuffled_data_list.append({   
+                data_list.append({   
                     k: v[:, start_idx:end_idx + 1].to("cpu")
                     for k, v in minibatch.items()
                 })
-        
-        shuffled_data_list = concat_across_processes(shuffled_data_list, self.device_mesh)
-        data_list = [None for _ in range(len(shuffled_data_list))]
-        for idx, data in zip(self.shuffle_indices, shuffled_data_list):
-            data_list[idx] = data
 
-        return data_list
+        shuffled_data_list = gather_and_concat_list(data_list, self.device_mesh)
+
+        if self.device_mesh.get_rank() == 0:
+
+            data_list = [None for _ in range(len(shuffled_data_list))]
+            for idx, data in zip(self.shuffle_indices, shuffled_data_list):
+                data_list[idx] = data
+
+            return data_list
+
+        else:
+            return None
 
     def group_minibatches_into_batches(
         self,
@@ -213,7 +246,7 @@ class Worker:
     def log(self, metrics: Dict[str, List], step: int):
 
         metrics = {
-            k: concat_across_processes(v, self.device_mesh)
+            k: gather_and_concat_list(v, self.device_mesh)
             for k, v in metrics.items()
         }
         

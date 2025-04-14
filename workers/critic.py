@@ -36,7 +36,7 @@ class Critic(Worker):
         step: int
     ) -> List[Dict[str, torch.Tensor]]:
         self.load_model_to_gpu()
-        minibatches = self.pack_data_list_to_minibatches(data_list, False)
+        minibatches = self.scatter_and_pack_data_list(data_list, False)
 
         self.model.eval()
         for minibatch in (
@@ -46,12 +46,12 @@ class Critic(Worker):
             minibatch["values"] = self.forward(minibatch)
         
         # No need to offload model because it will be updated soon. See `Trainer.train`.
-        return self.resume_data_list_from_minibatches(minibatches)
+        return self.resume_and_gather_data_list(minibatches)
 
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
         # Model has been loaded in `compute_values`.
         self.load_optimizer_to_gpu()
-        minibatches = self.pack_data_list_to_minibatches(data_list, True)
+        minibatches = self.scatter_and_pack_data_list(data_list, True)
         batches = self.group_minibatches_into_batches(minibatches)
 
         self.model.train()

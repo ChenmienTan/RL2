@@ -31,7 +31,11 @@ actor:
     coef: 0.0
     type: null # `reward` or `loss`
     level: null # `token` or `sequence`
-    estimator: null # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html
+    estimator: null # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html.
+    # These three hyper-paratemers are mutually orthogonal.
+    # Two typical choices are
+    #   - OpenAI PPO: type=reward, level=token, estimator=k1
+    #   - DeepSeek GRPO: type=loss, level=sequence, estimator=k3
 
 critic:
   model_name: Qwen/Qwen2.5-7B
