@@ -52,7 +52,7 @@ class Trainer:
         sampler = DistributedSampler(
             dataset,
             num_replicas=self.actor.rollout_device_mesh["dp"].size(),
-            rank=self.actor.rollout_device_mesh["dp"].get_rank(),
+            rank=self.actor.rollout_device_mesh["dp"].get_local_rank(),
             # Sharded inference engines share identical data.
             shuffle=train,
             drop_last=True
@@ -129,6 +129,10 @@ class Trainer:
 
 @hydra.main(config_path="", config_name="config", version_base=None)
 def main(config):
+
+    if config.trainer.disable_wandb:
+        wandb.init = lambda *args, **kwargs: None
+        wandb.log = lambda *args, **kwargs: None
 
     initialize_global_process_group()
     

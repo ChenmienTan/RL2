@@ -2,7 +2,7 @@ from typing import Optional, Dict
 import os
 import torch
 from transformers.modeling_flash_attention_utils import (
-    # _flash_supports_window_size, # TODO: update this
+    _flash_supports_window_size,
     is_flash_attn_greater_or_equal
 )
 import transformers
@@ -34,16 +34,16 @@ def get_ring_flash_attn(process_group, cu_seqlens, max_seqlen):
         **kwargs
     ):
         
-        # use_sliding_windows = (
-        #     _flash_supports_window_size
-        #     and sliding_window is not None
-        #     and key_states.shape[1] > sliding_window
-        # )
-        # flash_kwargs = (
-        #     {"window_size": (sliding_window, sliding_window)}
-        #     if use_sliding_windows
-        #     else {}
-        # )
+        use_sliding_windows = (
+            _flash_supports_window_size
+            and sliding_window is not None
+            and key_states.shape[1] > sliding_window
+        )
+        flash_kwargs = (
+            {"window_size": (sliding_window, sliding_window)}
+            if use_sliding_windows
+            else {}
+        )
         flash_kwargs = {}
 
         if is_flash_attn_greater_or_equal("2.4.1"):
@@ -79,7 +79,7 @@ class RingAttentionContext:
         torch.cat((
             torch.IntTensor([0]).to(torch.cuda.current_device()),
             seqlens
-        )), 0)
+        )), 0, dtype=torch.int32)
         self.max_seqlen = seqlens.max().item()
 
     def __enter__(self):

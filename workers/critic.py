@@ -51,12 +51,12 @@ class Critic(Worker):
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
         # Model has been loaded in `compute_values`. See `Trainer.train`.
         self.load_optimizer_to_gpu()
-        minibatches = self.scatter_and_pack_data_list(data_list, True)
-        batches = self.group_minibatches_into_batches(minibatches)
+        batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
         metrics = defaultdict(list)
-        tbar = tqdm(total=len(minibatches), desc=f"Step {step + 1}, update critic")
+        if self.device_mesh.get_rank() == 0:
+            tbar = tqdm(total=len(batches) * len(batches[0]), desc=f"Step {step + 1}, update critic")
         for batch in batches:
 
             total_actions = sum_across_processes(
@@ -82,7 +82,8 @@ class Critic(Worker):
                 loss.backward()
                 metrics["critic/loss"].append(self.device_mesh.size() * len(batch) * loss.item())
                 metrics["critic/clip_ratio"].append(self.device_mesh.size() * len(batch) * clip_ratio.item())
-                tbar.update()
+                if self.device_mesh.get_rank() == 0:
+                    tbar.update()
 
             grad_norm = self.model.clip_grad_norm_(self.config.max_grad_norm)
             metrics["critic/grad_norm"].append(grad_norm.item())

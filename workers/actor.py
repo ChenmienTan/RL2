@@ -100,7 +100,7 @@ class Actor(Worker):
 
         if train:
             # If test, llm will soon be called again. See `Trainer.train`.
-            self.llm.sleep() # TODO: perhaps level=2
+            self.llm.sleep(level=2)
 
         data_list = [
             {
@@ -217,12 +217,12 @@ class Actor(Worker):
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
         self.load_model_to_gpu()
         self.load_optimizer_to_gpu()
-        minibatches = self.scatter_and_pack_data_list(data_list, True)
-        batches = self.group_minibatches_into_batches(minibatches)
+        batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
         metrics = defaultdict(list)
-        tbar = tqdm(total=len(minibatches), desc=f"Step {step + 1}, update actor")
+        if self.device_mesh.get_rank() == 0:
+            tbar = tqdm(total=len(batches) * len(batches[0]), desc=f"Step {step + 1}, update actor")
         for batch in batches:
             
             total_actions = sum_across_processes(
@@ -274,7 +274,8 @@ class Actor(Worker):
                 # we multiply the world size (resp. bsz) here to get 
                 # the correct value.
                 metrics["actor/clip_ratio"].append(self.device_mesh.size() * len(batch) * clip_ratio.item())
-                tbar.update()
+                if self.device_mesh.get_rank() == 0:
+                    tbar.update()
 
             grad_norm = self.model.clip_grad_norm_(self.config.max_grad_norm)
             metrics["grad_norm"].append(grad_norm.item())

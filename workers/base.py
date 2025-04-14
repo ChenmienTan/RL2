@@ -1,5 +1,4 @@
-from typing import List, Dict, Optional
-import time
+from typing import List, Dict, Optional, Union
 import math
 import torch
 import torch.distributed as dist
@@ -84,7 +83,7 @@ class Worker:
         self,
         data_list: Optional[List[Dict[str, torch.Tensor]]],
         train: bool
-    ) -> List[Dict[str, torch.Tensor]]:
+    ) -> Union[List[List[Dict[str, torch.Tensor]]], List[Dict[str, torch.Tensor]]]:
 
         if self.device_mesh.get_rank() == 0:
 
@@ -140,8 +139,9 @@ class Worker:
         dist.scatter_object_list(data_list, data_lists, src=0)
         data_list: List[List[Dict[str, torch.Tensor]]] = data_list[0]
 
-        multiple_of = 2 * self.sp_device_mesh["sp"].size()
-        rank = self.sp_device_mesh["sp"].get_local_rank()
+        if train and self.sp_device_mesh["sp"].size() > 1:
+            multiple_of = 2 * self.sp_device_mesh["sp"].size()
+            rank = self.sp_device_mesh["sp"].get_local_rank()
         minibatches = []
         for data in data_list:
             minibatch = {}
@@ -172,7 +172,16 @@ class Worker:
                 ).to(torch.cuda.current_device())
             minibatches.append(minibatch)
 
-        return minibatches
+        if train:
+
+            n_minibatches_per_update = len(minibatches) // self.config.update_per_rollout
+            return [
+                minibatches[update * n_minibatches_per_update:(update + 1) * n_minibatches_per_update]
+                for update in range(self.config.update_per_rollout)
+            ]
+        
+        else:
+            return minibatches
     
     def resume_and_gather_data_list(
         self,
@@ -204,17 +213,6 @@ class Worker:
 
         else:
             return None
-
-    def group_minibatches_into_batches(
-        self,
-        minibatches: List[Dict[str, torch.Tensor]]
-    ) -> List[List[Dict[str, torch.Tensor]]]:
-
-        n_minibatches_per_update = len(minibatches) // self.config.update_per_rollout
-        return [ # TODO: perhaps rank them
-            minibatches[update * n_minibatches_per_update:(update + 1) * n_minibatches_per_update]
-            for update in range(self.config.update_per_rollout)
-        ]
 
     def log(self, metrics: Dict[str, List], step: int):
 

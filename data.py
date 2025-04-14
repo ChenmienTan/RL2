@@ -3,7 +3,7 @@ import json
 from torch.utils.data import Dataset
 
 class RLDataset(Dataset):
-# TODO: support datasets
+    
     def __init__(
         self,
         data_path,
@@ -23,8 +23,7 @@ class RLDataset(Dataset):
     def __getitem__(self, idx):
 
         ex = self.dataset[idx]
-        # message = ex["message"]
-        message = [{"role": "user", "content": ex["prompt"]}]
+        message = ex["message"]
         answer = ex["answer"]
 
         prompt = self.tokenizer.apply_chat_template(

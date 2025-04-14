@@ -32,7 +32,8 @@ actor:
     type: null # `reward` or `loss`
     level: null # `token` or `sequence`
     estimator: null # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html.
-    # These three hyper-paratemers are mutually orthogonal.
+    # These three hyper-paratemers are mutually orthogonal, so there 
+    # are 2 * 2 * 3 = 12 combinations in total.
     # Two typical choices are
     #   - OpenAI PPO: type=reward, level=token, estimator=k1
     #   - DeepSeek GRPO: type=loss, level=sequence, estimator=k3
