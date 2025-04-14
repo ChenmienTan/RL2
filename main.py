@@ -32,12 +32,8 @@ class Trainer:
         self.actor = Actor(config.actor, self.device_mesh, True)
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.model_name)
-        self.sampler, self.train_dataloader = self.prepare_sampler_dataloader(
-            config.data.train_data_path, True
-        )
-        _, self.test_dataloader = self.prepare_sampler_dataloader(
-            config.data.test_data_path, False
-        )
+        self.sampler, self.train_dataloader = self.prepare_sampler_dataloader(True)
+        _, self.test_dataloader = self.prepare_sampler_dataloader(False)
 
         if self.device_mesh.get_rank() == 0:
             wandb.init(
@@ -46,23 +42,27 @@ class Trainer:
                 config=OmegaConf.to_container(self.config)
             )
 
-    def prepare_sampler_dataloader(self, data_path, train: bool):
+    def prepare_sampler_dataloader(self, train: bool):
 
         dataset = RLDataset(
-            data_path,
+            self.config.data.train_data_path if train else self.config.data.test_data_path,
             self.tokenizer,
             self.config.data.max_prompt_length
         )
         sampler = DistributedSampler(
             dataset,
-            num_replicas=self.actor.sp_device_mesh["dp"].size(),
-            rank=self.actor.sp_device_mesh["dp"].get_rank(),
+            num_replicas=self.actor.rollout_device_mesh["dp"].size(),
+            rank=self.actor.rollout_device_mesh["dp"].get_rank(),
+            # Sharded inference engines share identical data.
             shuffle=train,
             drop_last=True
         )
         dataloader = DataLoader(
             dataset,
-            (self.config.data.batch_size if train else len(dataset)) // self.actor.sp_device_mesh["dp"].size(),
+            (
+                self.config.data.batch_size
+                if train else len(dataset)
+            ) // self.actor.rollout_device_mesh["dp"].size(),
             # if test, pack all data in a single batch
             sampler=sampler,
             collate_fn=dataset.collate_fn
@@ -92,8 +92,8 @@ class Trainer:
     def train(self):
 
         step = 0
-        for data_dict in self.test_dataloader:
-            self.actor.rollout(data_dict, False, step)
+        for data_list in self.test_dataloader:
+            self.actor.rollout(data_list, False, step)
     
         for epoch in range(self.config.trainer.n_epochs):
             self.sampler.set_epoch(epoch)
@@ -118,8 +118,8 @@ class Trainer:
 
                 step += 1
                 if step % self.config.trainer.test_freq == 0:
-                    for data_dict in self.test_dataloader:
-                        self.actor.rollout(data_dict, False, step)
+                    for data_list in self.test_dataloader:
+                        self.actor.rollout(data_list, False, step)
                     
                 if step % self.config.trainer.save_freq == 0:
                     path = f"{self.config.trainer.save_dir}/{self.config.experiment_name}/{step}"

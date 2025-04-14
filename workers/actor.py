@@ -10,7 +10,7 @@ from vllm import LLM, SamplingParams
 from tqdm import tqdm
 from workers.base import Worker
 from algs import compute_kl_term
-from utils.ring_attn import RingAttnManager
+from utils.ring_attn import RingAttentionContext
 from utils.comm import gather_and_concat_list, sum_across_processes
 
 
@@ -65,7 +65,7 @@ class Actor(Worker):
             self.config.model_name,
             tensor_parallel_size=self.config.rollout.tp_size,
             distributed_executor_backend="external_launcher",
-            # SPMD, see https://github.com/vllm-project/vllm/issues/11400
+            # See https://github.com/vllm-project/vllm/issues/11400.
             gpu_memory_utilization=self.config.rollout.gpu_memory_utilization,
             enable_sleep_mode=True,
             seed=self.rollout_device_mesh["dp"].get_local_rank()
@@ -101,7 +101,6 @@ class Actor(Worker):
         if train:
             # If test, llm will soon be called again. See `Trainer.train`.
             self.llm.sleep() # TODO: perhaps level=2
-            torch.cuda.empty_cache()
 
         data_list = [
             {
@@ -113,16 +112,20 @@ class Actor(Worker):
             for output in response.outputs
         ]
 
-        rank = self.sp_device_mesh["sp"].get_local_rank()
-        batch_size_per_device = len(data_list) // self.sp_device_mesh["sp"].size()
-        data_list = data_list[rank * batch_size_per_device:(rank + 1) * batch_size_per_device]
-        # Each device grades its respective data to avoid duplicate computation.
+        # Each device grades its respective trajectories to avoid duplicate computation.
+        rank = self.rollout_device_mesh["dp"].get_local_rank()
+        n_trajectories_per_device = len(data_list) // self.rollout_device_mesh["dp"].size()
+        data_list = data_list[rank * n_trajectories_per_device:(rank + 1) * n_trajectories_per_device]
 
         for ex in data_list:
             ex["reward"] = self.reward_fn(ex["response"], ex["answer"])
-        # Only support outcome reward. RM should be served remotely if there is
+        # Only support outcome reward. RM should be served remotely if there is.
 
-        self.log({f"reward/{'train' if train else 'test'}": [ex["reward"] for ex in data_list]}, step)
+        suffix = "train" if train else "test"
+        self.log({
+            f"response_length/{suffix}": [len(ex["response_id"]) for ex in data_list],
+            f"reward/{suffix}": [ex["reward"] for ex in data_list]
+        }, step)
 
         if train:
 
@@ -179,7 +182,7 @@ class Actor(Worker):
         total_actions = sum_across_processes(
             sum([minibatch["action_mask"].sum() for minibatch in minibatches])
         )
-        total_sequences = sum_across_processes(
+        total_trajectories = sum_across_processes(
             sum([minibatch["eos_mask"].sum() for minibatch in minibatches])
         )
         
@@ -196,14 +199,12 @@ class Actor(Worker):
                     minibatch["old_logps"], minibatch["ref_logps"],
                     self.config.kl.estimator,
                     minibatch["eos_mask"]
-                    if self.config.kl.level == "sequence"
-                    else None               
+                    if self.config.kl.level == "sequence" else None               
                 )
                 minibatch["rewards"] -= self.config.kl.coef * kl_term
                 kl = kl_term.sum() / (
                     total_actions
-                    if self.config.kl.level == "token"
-                    else total_sequences
+                    if self.config.kl.level == "token" else total_trajectories
                 )
                 metrics["kl"].append(self.device_mesh.size() * len(minibatches) * kl)
         
@@ -227,14 +228,14 @@ class Actor(Worker):
             total_actions = sum_across_processes(
                 sum([minibatch["action_mask"].sum() for minibatch in batch])
             )
-            total_sequences = sum_across_processes(
+            total_trajectories = sum_across_processes(
                 sum([minibatch["eos_mask"].sum() for minibatch in batch])
             )
             
             for minibatch in batch:
 
                 with (
-                    RingAttnManager(self.sp_device_mesh["sp"], minibatch["seqlens"])
+                    RingAttentionContext(self.sp_device_mesh["sp"], minibatch["seqlens"])
                     if self.sp_device_mesh["sp"].size() > 1 else nullcontext()
                 ):
                     logps = self.forward(minibatch)
@@ -259,7 +260,7 @@ class Actor(Worker):
                     ).sum() / (
                         total_actions
                         if self.config.kl.level == "token"
-                        else total_sequences
+                        else total_trajectories
                     )
                     loss = loss + self.config.kl.coef * kl
 
@@ -288,6 +289,6 @@ class Actor(Worker):
         self.offload_model_to_cpu()
         # offload params here, or params cannot be summoned
         torch.cuda.empty_cache() # or llm.wake_up() will OOM
-        self.llm.wake_up() # upload inference engine to GPU
+        self.llm.wake_up() # load inference engine to GPU
         model = self.llm.llm_engine.model_executor.driver_worker.worker.model_runner.model
         model.load_weights(((name, param) for name, param in state_dict.items()))

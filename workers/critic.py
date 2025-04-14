@@ -5,7 +5,7 @@ import torch
 from transformers import AutoModelForTokenClassification
 from tqdm import tqdm
 from workers.base import Worker
-from utils.ring_attn import RingAttnManager
+from utils.ring_attn import RingAttentionContext
 from utils.comm import sum_across_processes
 
 
@@ -49,7 +49,7 @@ class Critic(Worker):
         return self.resume_and_gather_data_list(minibatches)
 
     def update(self, data_list: List[Dict[str, torch.Tensor]], step: int):
-        # Model has been loaded in `compute_values`.
+        # Model has been loaded in `compute_values`. See `Trainer.train`.
         self.load_optimizer_to_gpu()
         minibatches = self.scatter_and_pack_data_list(data_list, True)
         batches = self.group_minibatches_into_batches(minibatches)
@@ -65,7 +65,7 @@ class Critic(Worker):
 
             for minibatch in batch:
                 with (
-                    RingAttnManager(self.sp_device_mesh["sp"], minibatch["seqlens"])
+                    RingAttentionContext(self.sp_device_mesh["sp"], minibatch["seqlens"])
                     if self.sp_device_mesh["sp"].size() > 1 else nullcontext()
                 ):
                     values = self.forward(minibatch)

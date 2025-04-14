@@ -2,13 +2,13 @@ from typing import Optional, Dict
 import os
 import torch
 from transformers.modeling_flash_attention_utils import (
-    # _flash_supports_window_size,
+    # _flash_supports_window_size, # TODO: update this
     is_flash_attn_greater_or_equal
 )
 import transformers
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from ring_flash_attn.zigzag_ring_flash_attn_varlen import zigzag_ring_flash_attn_varlen_func
 from ring_flash_attn.adapters.hf_adapter import flash_attention_forward
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
     
 def get_ring_flash_attn(process_group, cu_seqlens, max_seqlen):
 
@@ -70,18 +70,16 @@ def get_ring_flash_attn(process_group, cu_seqlens, max_seqlen):
     return _flash_attention_forward
 
 
-class RingAttnManager:
+class RingAttentionContext:
 
     def __init__(self, device_mesh, seqlens: torch.Tensor):
 
         self.device_mesh = device_mesh
         self.cu_seqlens = torch.cumsum(
-            torch.cat((
-                torch.IntTensor([0]).to(torch.cuda.current_device()),
-                seqlens
-            )),
-            0
-        )
+        torch.cat((
+            torch.IntTensor([0]).to(torch.cuda.current_device()),
+            seqlens
+        )), 0)
         self.max_seqlen = seqlens.max().item()
 
     def __enter__(self):

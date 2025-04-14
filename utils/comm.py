@@ -5,10 +5,10 @@ import torch.distributed as dist
 
 def initialize_global_process_group(timeout_second=36000):
     
-    torch.distributed.init_process_group("nccl", timeout=timedelta(seconds=timeout_second))
+    dist.init_process_group("nccl", timeout=timedelta(seconds=timeout_second))
 
     local_rank = int(os.environ["LOCAL_RANK"])
-    if torch.distributed.is_initialized():
+    if dist.is_initialized():
         torch.cuda.set_device(local_rank)
 
 def sum_across_processes(value):

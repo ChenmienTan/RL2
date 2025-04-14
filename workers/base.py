@@ -15,28 +15,8 @@ from utils.fsdp import (
     offload_fsdp_optimizer,
     load_fsdp_optimizer
 )
-from utils.seq import get_seqlen_balanced_partitions
+from utils.seqlen_balance import get_seqlen_balanced_partitions
 from utils.comm import gather_and_concat_list
-
-
-class TimeMemoryLogger:
-
-    def __init__(self, device_mesh, op):
-        self.device_mesh = device_mesh
-        self.op = op
-
-    def __enter__(self):
-        self.start_time = time.time()
-        start_memory = torch.cuda.memory_allocated() / (1024 ** 3)
-        if self.device_mesh.get_rank() == 0:
-            print(f"Before {self.op}, {round(start_memory, 1)} GB memory is allocated.")
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        end_time = time.time()
-        end_memory = torch.cuda.memory_allocated() / (1024 ** 3)
-        if self.device_mesh.get_rank() == 0:
-            print(f"{self.op} takes {round(end_time - self.start_time, 1)} seconds.")
-            print(f"After {self.op}, {round(end_memory, 1)} GB memory is allocated.")
         
 
 class Worker:
@@ -86,23 +66,19 @@ class Worker:
 
     def offload_model_to_cpu(self):
         if self.config.offload_model:
-            with TimeMemoryLogger(self.device_mesh, "offloading model to CPU"):
-                offload_fsdp_model_to_cpu(self.model)
+            offload_fsdp_model_to_cpu(self.model)
     
     def load_model_to_gpu(self):
         if self.config.offload_model:
-            with TimeMemoryLogger(self.device_mesh, "loading model to GPU"):
-                load_fsdp_model_to_gpu(self.model)
+            load_fsdp_model_to_gpu(self.model)
 
     def offload_optimizer_to_cpu(self):
         if self.config.offload_optimizer:
-            with TimeMemoryLogger(self.device_mesh, "offloading optimizer to CPU"):
-                offload_fsdp_optimizer(self.optimizer)
+            offload_fsdp_optimizer(self.optimizer)
 
     def load_optimizer_to_gpu(self):
         if self.config.offload_optimizer:
-            with TimeMemoryLogger(self.device_mesh, "loading optimizer to GPU"):
-                load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
+            load_fsdp_optimizer(self.optimizer, torch.cuda.current_device())
 
     def scatter_and_pack_data_list(
         self,
@@ -141,12 +117,12 @@ class Worker:
                 [data_list[p] for p in partition]
                 for partition in partitions
             ]
-            n_minibatch_per_process = n_minibatches // (
+            n_minibatches_per_process = n_minibatches // (
                 self.sp_device_mesh["dp"].size()
                 if train else self.device_mesh.size()
             )
             data_lists: List[List[List[Dict[str, torch.Tensor]]]] = [
-                data_list[rank * n_minibatch_per_process:(rank + 1) * n_minibatch_per_process]
+                data_list[rank * n_minibatches_per_process:(rank + 1) * n_minibatches_per_process]
                 for rank in range(
                     self.sp_device_mesh["dp"].size()
                     if train else self.device_mesh.size()
@@ -166,7 +142,6 @@ class Worker:
 
         multiple_of = 2 * self.sp_device_mesh["sp"].size()
         rank = self.sp_device_mesh["sp"].get_local_rank()
-
         minibatches = []
         for data in data_list:
             minibatch = {}
@@ -184,12 +159,10 @@ class Worker:
                                 (tensor, torch.zeros((1, padding_tokens), dtype=tensor.dtype)),
                             -1)
                         half_seqlen = tensor.shape[-1] // multiple_of
-                        tensor = torch.cat(
-                            (
-                                tensor[:, rank * half_seqlen:(rank + 1) * half_seqlen],
-                                tensor[:, -(rank + 1) * half_seqlen:- rank * half_seqlen]
-                            ),
-                        -1)
+                        tensor = torch.cat((
+                            tensor[:, rank * half_seqlen:(rank + 1) * half_seqlen],
+                            tensor[:, -(rank + 1) * half_seqlen:- rank * half_seqlen]
+                        ), -1)
 
                     tensors.append(tensor)
                 minibatch[k] = torch.cat(tensors, -1).to(torch.cuda.current_device())
@@ -251,12 +224,10 @@ class Worker:
         }
         
         if self.device_mesh.get_rank() == 0:
-            wandb.log(
-                {
-                    k: torch.Tensor(v).mean().item()
-                    for k, v in metrics.items()
-                }, step=step    
-            )
+            wandb.log({
+                k: torch.Tensor(v).mean().item()
+                for k, v in metrics.items()
+            }, step=step)
 
     def save(self, path):
 
