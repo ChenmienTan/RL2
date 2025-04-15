@@ -64,22 +64,29 @@ class Critic(Worker):
             )
 
             for minibatch in batch:
+                
                 with (
-                    RingAttentionContext(self.sp_device_mesh["sp"], minibatch["seqlens"])
-                    if self.sp_device_mesh["sp"].size() > 1 else nullcontext()
+                    RingAttentionContext(
+                        self.sp_device_mesh["sp"],
+                        minibatch["seqlens"]
+                    )
+                    if self.sp_device_mesh["sp"].size() > 1
+                    else nullcontext()
                 ):
-                    values = self.forward(minibatch)
-                clipped_values = torch.clamp(
-                    values,
-                    minibatch["values"] - self.config.clip,
-                    minibatch["values"] + self.config.clip
-                )
-                mse = (values - minibatch["returns"]).pow(2)
-                clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
-                loss = torch.max(mse, clipped_mse).sum() / total_actions
-                clip_ratio = (mse < clipped_mse).sum() / total_actions
 
-                loss.backward()
+                    values = self.forward(minibatch)
+                    clipped_values = torch.clamp(
+                        values,
+                        minibatch["values"] - self.config.clip,
+                        minibatch["values"] + self.config.clip
+                    )
+                    mse = (values - minibatch["returns"]).pow(2)
+                    clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
+                    loss = torch.max(mse, clipped_mse).sum() / total_actions
+                    clip_ratio = (mse < clipped_mse).sum() / total_actions
+
+                    loss.backward()
+
                 metrics["critic/loss"].append(self.device_mesh.size() * len(batch) * loss.item())
                 metrics["critic/clip_ratio"].append(self.device_mesh.size() * len(batch) * clip_ratio.item())
                 if self.device_mesh.get_rank() == 0:

@@ -9,7 +9,7 @@ actor:
   gradient_checkpointing: true
   sp_size: 1
   train_max_length_per_device: 16384
-  inference_max_length_per_device: 131072
+  inference_max_length_per_device: 65536
   clip: 0.2
   update_per_rollout: 1
   lr: 1e-6
@@ -43,7 +43,7 @@ critic:
   gradient_checkpointing: true
   sp_size: 1
   train_max_length_per_device: 16384
-  inference_max_length_per_device: 131072
+  inference_max_length_per_device: 65536
   clip: 0.5
   update_per_rollout: 4
   lr: 5e-6

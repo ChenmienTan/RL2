@@ -235,44 +235,50 @@ class Actor(Worker):
             for minibatch in batch:
 
                 with (
-                    RingAttentionContext(self.sp_device_mesh["sp"], minibatch["seqlens"])
-                    if self.sp_device_mesh["sp"].size() > 1 else nullcontext()
-                ):
-                    logps = self.forward(minibatch)
-                ratio = (logps - minibatch["old_logps"]).exp()
-                clipped_ratio = torch.clamp(
-                    ratio,
-                    1 - self.config.clip,
-                    1 + self.config.clip
-                )
-                objective = minibatch["advantages"] * ratio
-                clipped_objective = minibatch["advantages"] * clipped_ratio
-                loss = - torch.min(objective, clipped_objective).sum() / total_actions
-                clip_ratio = (objective > clipped_objective).sum() / total_actions
-
-                if self.config.kl.coef > 0 and self.config.kl.type == "loss":
-                    # TODO: problematic when using ring attn and `kl.level=sequence`
-                    kl = compute_kl_term(
-                        logps, minibatch["ref_logps"],
-                        self.config.kl.estimator,
-                        minibatch["eos_mask"]
-                        if self.config.kl.level == "sequence" else None
-                    ).sum() / (
-                        total_actions
-                        if self.config.kl.level == "token"
-                        else total_trajectories
+                    RingAttentionContext(
+                        self.sp_device_mesh["sp"],
+                        minibatch["seqlens"]
                     )
-                    loss = loss + self.config.kl.coef * kl
+                    if self.sp_device_mesh["sp"].size() > 1
+                    else nullcontext()
+                ):
 
-                    metrics["kl"].append(self.device_mesh.size() * len(batch) * kl)
+                    logps = self.forward(minibatch)
+                    ratio = (logps - minibatch["old_logps"]).exp()
+                    clipped_ratio = torch.clamp(
+                        ratio,
+                        1 - self.config.clip,
+                        1 + self.config.clip
+                    )
+                    objective = minibatch["advantages"] * ratio
+                    clipped_objective = minibatch["advantages"] * clipped_ratio
+                    loss = - torch.min(objective, clipped_objective).sum() / total_actions
+                    clip_ratio = (objective > clipped_objective).sum() / total_actions
 
-                loss.backward()         
+                    if self.config.kl.coef > 0 and self.config.kl.type == "loss":
+                        # TODO: problematic when using ring attn and `kl.level=sequence`
+                        kl = compute_kl_term(
+                            logps, minibatch["ref_logps"],
+                            self.config.kl.estimator,
+                            minibatch["eos_mask"]
+                            if self.config.kl.level == "sequence" else None
+                        ).sum() / (
+                            total_actions
+                            if self.config.kl.level == "token"
+                            else total_trajectories
+                        )
+                        loss = loss + self.config.kl.coef * kl
+
+                        metrics["kl"].append(self.device_mesh.size() * len(batch) * kl)
+
+                    loss.backward()
+
                 metrics["actor/loss"].append(self.device_mesh.size() * len(batch) * loss.item())
                 # The losses on different data processes (resp. of 
-                # minibatches within a batch) are accumulated but the 
-                # value will be averaged in `Worker.log`. Therefore 
-                # we multiply the world size (resp. bsz) here to get 
-                # the correct value.
+                # minibatches within a batch) are accumulated but 
+                # the value will be averaged in `Worker.log`. 
+                # Therefore we multiply the world size (resp. bsz) 
+                # here to get the correct value.
                 metrics["actor/clip_ratio"].append(self.device_mesh.size() * len(batch) * clip_ratio.item())
                 if self.device_mesh.get_rank() == 0:
                     tbar.update()

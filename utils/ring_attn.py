@@ -92,6 +92,6 @@ class RingAttentionContext:
         )
         ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
 
         ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = self.original_flash_attn

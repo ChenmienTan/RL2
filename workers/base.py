@@ -167,7 +167,7 @@ class Worker:
                         half_seqlen = tensor.shape[-1] // multiple_of
                         tensor = torch.cat((
                             tensor[:, rank * half_seqlen:(rank + 1) * half_seqlen],
-                            tensor[:, -(rank + 1) * half_seqlen:- rank * half_seqlen]
+                            tensor[:, (multiple_of - rank - 1) * half_seqlen: (multiple_of - rank) * half_seqlen]
                         ), -1)
 
                     tensors.append(tensor)
