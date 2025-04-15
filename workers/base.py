@@ -96,13 +96,14 @@ class Worker:
             )
             # At least n_minibatches minibatches are needed.
             # SP is used to shard cached activations, which is 
-            # unnecessary at inference. Every dp should has identical 
-            # number of minibatches, thus the total number of 
-            # minibatches must be a multiple of world size. 
-            # Additinally, at training, the number of minibatches on 
-            # each dp must be a multiple of updates so that they can 
-            # be evenly devided into multiple batches, with each being 
-            # used for an update.
+            # unnecessary at inference. Every dp should has 
+            # identical number of minibatches, thus the total 
+            # number of minibatches must be a multiple of world 
+            # size. Additinally, at training, the number of 
+            # minibatches on each dp must be a multiple of 
+            # updates so that they can be evenly devided into 
+            # multiple batches, with each being used for an 
+            # update.
             multiple_of = self.sp_device_mesh["dp"].size() * self.config.update_per_rollout if train else self.device_mesh.size()
             if n_minibatches % multiple_of != 0:
                 n_minibatches += (multiple_of - n_minibatches % multiple_of)
@@ -111,11 +112,11 @@ class Worker:
                 seq_len_list, k_partitions=n_minibatches, equal_size=False
             )
             self.shuffle_indices: List[int] = sum(partitions, [])
-            # Cache this for `resume_and_gather_data_list`
+            # Cache this for `resume_and_gather_data_list`.
             data_list: List[List[Dict[str, torch.Tensor]]] = [
                 [data_list[p] for p in partition]
                 for partition in partitions
-            ]
+            ] # Trajectories within an inner list will be packed into a minibatch.
             n_minibatches_per_process = n_minibatches // (
                 self.sp_device_mesh["dp"].size()
                 if train else self.device_mesh.size()
@@ -129,7 +130,7 @@ class Worker:
                 for _ in range(
                     self.sp_device_mesh["sp"].size()
                     if train else 1
-                )
+                ) # The n-th list contains data for rank n.
             ]
         
         else:
@@ -138,6 +139,7 @@ class Worker:
         data_list = [None]
         dist.scatter_object_list(data_list, data_lists, src=0)
         data_list: List[List[Dict[str, torch.Tensor]]] = data_list[0]
+        # Next we pack trajectories within the inner lists into minibatches.
 
         if train and self.sp_device_mesh["sp"].size() > 1:
             multiple_of = 2 * self.sp_device_mesh["sp"].size()
@@ -151,7 +153,11 @@ class Worker:
                     tensor = ex[k]
 
                     if train and self.sp_device_mesh["sp"].size() > 1:
-                        # When using ring attention.
+                        # Zigzag ring attention is used to 
+                        # balance the load across devices, where 
+                        # the sequence length needs to be 
+                        # multiple of 2 * world_size and each 
+                        # rank sequentially get the head and tail.
                         # See https://zhuanlan.zhihu.com/p/683714620.
                         if tensor.shape[-1] % multiple_of != 0:
                             padding_tokens = multiple_of - tensor.shape[-1] % multiple_of
@@ -170,10 +176,11 @@ class Worker:
                 minibatch["seqlens"] = torch.IntTensor(
                     [tensor.shape[-1] for tensor in tensors]
                 ).to(torch.cuda.current_device())
+                # Required by `RingAttentionContext`.
             minibatches.append(minibatch)
 
         if train:
-
+            # Group minibatches into batches.
             n_minibatches_per_update = len(minibatches) // self.config.update_per_rollout
             return [
                 minibatches[update * n_minibatches_per_update:(update + 1) * n_minibatches_per_update]

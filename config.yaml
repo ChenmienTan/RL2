@@ -8,8 +8,8 @@ actor:
   model_name: Qwen/Qwen2.5-7B
   gradient_checkpointing: true
   sp_size: 1
-  train_max_length_per_device: 8192
-  inference_max_length_per_device: 32768
+  train_max_length_per_device: 16384
+  inference_max_length_per_device: 131072
   clip: 0.2
   update_per_rollout: 1
   lr: 1e-6
@@ -32,8 +32,8 @@ actor:
     type: null # `reward` or `loss`
     level: null # `token` or `sequence`
     estimator: null # `k1`, `k2` or `k3`. See http://joschu.net/blog/kl-approx.html.
-    # These three hyper-paratemers are mutually orthogonal, so there 
-    # are 2 * 2 * 3 = 12 combinations in total.
+    # These three hyper-paratemers are mutually orthogonal, so 
+    # there are 2 * 2 * 3 = 12 possible combinations.
     # Two typical choices are
     #   - OpenAI PPO: type=reward, level=token, estimator=k1
     #   - DeepSeek GRPO: type=loss, level=sequence, estimator=k3
@@ -42,8 +42,8 @@ critic:
   model_name: Qwen/Qwen2.5-7B
   gradient_checkpointing: true
   sp_size: 1
-  train_max_length_per_device: 8192
-  inference_max_length_per_device: 32768
+  train_max_length_per_device: 16384
+  inference_max_length_per_device: 131072
   clip: 0.5
   update_per_rollout: 4
   lr: 5e-6
@@ -65,4 +65,5 @@ trainer:
   test_freq: 8
   save_freq: 32
   save_dir: ckpts
+  disable_wandb: false
   

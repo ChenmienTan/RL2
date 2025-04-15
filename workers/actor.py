@@ -100,7 +100,7 @@ class Actor(Worker):
 
         if train:
             # If test, llm will soon be called again. See `Trainer.train`.
-            self.llm.sleep(level=2)
+            self.llm.sleep()
 
         data_list = [
             {
@@ -113,8 +113,8 @@ class Actor(Worker):
         ]
 
         # Each device grades its respective trajectories to avoid duplicate computation.
-        rank = self.rollout_device_mesh["dp"].get_local_rank()
-        n_trajectories_per_device = len(data_list) // self.rollout_device_mesh["dp"].size()
+        rank = self.rollout_device_mesh["tp"].get_local_rank()
+        n_trajectories_per_device = len(data_list) // self.rollout_device_mesh["tp"].size()
         data_list = data_list[rank * n_trajectories_per_device:(rank + 1) * n_trajectories_per_device]
 
         for ex in data_list:
@@ -278,7 +278,7 @@ class Actor(Worker):
                     tbar.update()
 
             grad_norm = self.model.clip_grad_norm_(self.config.max_grad_norm)
-            metrics["grad_norm"].append(grad_norm.item())
+            metrics["actor/grad_norm"].append(grad_norm.item())
             self.optimizer.step()
             self.optimizer.zero_grad()
 

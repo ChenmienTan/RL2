@@ -34,7 +34,7 @@ def compute_kl_term(
         # If eos_mask is provided, we firstly compute the logp of 
         # the sequence. This corresponds to `kl_level=sequence`.
         logps = accumulate_to_eos(logps, eos_mask)
-        ref_logps = accumulate_to_eos(logps, eos_mask)
+        ref_logps = accumulate_to_eos(ref_logps, eos_mask)
 
     logp_diffs = logps - ref_logps
     if kl_estimator == "k1":
