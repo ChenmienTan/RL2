@@ -154,9 +154,10 @@ class Actor(Worker):
                         1 if message["role"] == "assistant" else 0
                     ])
 
-                actions = actions[1:] + [0]
-                action_mask = action_mask[1:] + [0]
-                rewards = (len(states) - 2) * [0] + [ex["reward"]] + [0]
+                states = states[:-1]
+                actions = actions[1:]
+                action_mask = action_mask[1:]
+                rewards = (len(states) - 1) * [0] + [ex["reward"]]
                 position_ids = list(range(len(states)))
                 eos_mask = (len(states) - 1) * [0] + [1]
 
