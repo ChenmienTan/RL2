@@ -54,13 +54,15 @@ def compute_kl_term(
 
 def compute_gae(data_list, gamma, lamda):
 
-    rewards, values = [], []
+    rewards, values, action_mask = [], [], []
     for ex in data_list:
         indices = torch.where(ex["action_mask"])[0]
         rewards.append(ex["rewards"][indices])
         values.append(ex["values"][indices])
+        action_mask.append(ex["action_mask"][indices])
     rewards = pad_sequence(rewards, True)
     values = pad_sequence(values, True)
+    action_mask = pad_sequence(action_mask, True)
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
     next_values = torch.cat((values[:, 1:], torch.zeros((values.shape[0], 1))), -1)
@@ -72,6 +74,11 @@ def compute_gae(data_list, gamma, lamda):
         gae = deltas[:, t] + gamma * lamda * gae
         reversed_gaes.append(gae)
     gaes = torch.stack(reversed_gaes[::-1], -1)
+
+    action_gaes = gaes[torch.where(action_mask)]
+    gaes = (gaes - action_gaes.mean()) * action_mask / (
+        action_gaes.std() + torch.finfo(gaes.dtype).eps
+    )
 
     for ex, gae in zip(data_list, gaes):
         ex["advantages"] = torch.zeros_like(ex["rewards"])
