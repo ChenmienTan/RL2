@@ -118,3 +118,8 @@ def compute_reinforce_adv(data_list, norm_var: bool):
             ex["advantages"] /= (
                 uid2std[ex["uid"]] + torch.finfo(ex["advantages"].dtype).eps
             )
+
+def fill_zero_adv(data_list):
+    
+    for ex in data_list:
+        ex["advantages"] = torch.zeros_like(ex["rewards"])
