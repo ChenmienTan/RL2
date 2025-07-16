@@ -10,6 +10,10 @@ from RL2.algs import (
     compute_approx_kl
 )
 from RL2.utils.ring_attn import update_params_of_ring_attn
+from RL2.utils.offloading import (
+    offload_model_to_cpu, load_model_to_gpu
+)
+from RL2.utils.logging import gather_and_reduce, rank0_log
 from RL2.utils.timing import time_logger
 
 
@@ -75,7 +79,8 @@ class Actor(Worker):
     @time_logger("compute_logps")
     @torch.no_grad()
     def compute_logps(self, data_list, step):
-        self.load_model_to_gpu()
+        if getattr(self.config, "offload_model", False):
+            load_model_to_gpu(self.model)
         minibatches = self.scatter_and_pack_data_list(data_list)
 
         prefix = "old" if self.train else "ref"
@@ -86,17 +91,20 @@ class Actor(Worker):
         ):
             minibatch[f"{prefix}_logps"] = self.forward(minibatch)
         
-        if not self.train:
-            self.offload_model_to_cpu()
+        if getattr(self.config, "offload_model", False) and not self.train:
+            offload_model_to_cpu(self.model)
         return self.unpack_and_gather_data_list(minibatches) 
     
     @time_logger("update_actor")
     def update(self, data_list, step: int):
+        
         if step < self.config.freeze_steps:
-            self.offload_model_to_cpu()
+            if getattr(self.config, "offload_model", False):
+                offload_model_to_cpu(self.model)
             return
         if self.config.kl.coef == 0 and self.config.update_per_rollout == 1:
-            self.load_model_to_gpu()
+            if getattr(self.config, "offload_model", False):
+                load_model_to_gpu(self.model)
         batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
@@ -148,12 +156,14 @@ class Actor(Worker):
             grad_norm = self.optimizer_step()
 
             for k, v in metric.items():
-                metrics[k].append(self.gather_and_reduce(v))
+                metrics[k].append(
+                    gather_and_reduce(v, self.device_mesh)
+                )
             metrics["actor/grad_norm"].append(grad_norm)
 
-        self.rank0_log(metrics, step)
+        rank0_log(metrics, step)
         if self.config.save_freq is not None and (step + 1) % self.config.save_freq == 0:
             self.save(step)
 
-        if self.config.adv_estimator == "gae":
-            self.offload_model_to_cpu()
+        if getattr(self.config, "offload_model", False) and self.config.adv_estimator == "gae":
+            offload_model_to_cpu(self.model)

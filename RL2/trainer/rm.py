@@ -8,6 +8,7 @@ from RL2.dataset import RMDataset
 from RL2.workers import Critic
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
+from RL2.utils.logging import gather_and_log
 from RL2.utils.timing import time_logger
 
 
@@ -48,7 +49,7 @@ class RMTrainer(Trainer):
         grad_norm = self.critic.optimizer_step()
         self.scheduler.step()
         metrics["grad_norm"].append(grad_norm)
-        self.critic.gather_and_log(metrics, step)
+        gather_and_log(metrics, self.critic.device_mesh["dp"], step)
 
     def train(self):
 

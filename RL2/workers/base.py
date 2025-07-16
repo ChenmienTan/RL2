@@ -13,7 +13,11 @@ from tqdm import tqdm
 from RL2.utils.models import prepare_tp_model, prepare_dp_model
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
-        
+from RL2.utils.offloading import (
+    offload_model_to_cpu,
+    offload_optimizer_to_cpu,
+    load_optimizer_to_gpu
+)
 
 class Worker:
 
@@ -74,23 +78,11 @@ class Worker:
                         f"{self.config.optimizer_dir}/optimizer_rank{dist.get_rank()}.pt"
                     )
                 )
-                self.offload_optimizer_to_cpu()
+                if getattr(self.config, "offload_optimizer", False):
+                    load_optimizer_to_gpu(self.optimizer)
 
-        self.offload_model_to_cpu()
-
-    def offload_model_to_cpu(self):
-        if not getattr(self.config, "offload_model", False):
-            return
-        for param in self.model.parameters():
-            param.data = param.data.to("cpu", non_blocking=True)
-    
-    def load_model_to_gpu(self):
-        if not getattr(self.config, "offload_model", False):
-            return
-        for param in self.model.parameters():
-            param.data = param.data.to(
-                torch.cuda.current_device(), non_blocking=True
-            )
+        if getattr(self.config, "offload_model", False):
+            offload_model_to_cpu(self.model)
 
     def scatter_and_pack_data_list(self, data_list, pack_minibatches=False, pair=False):
 
@@ -230,7 +222,9 @@ class Worker:
                         tensor[(multiple_of - rank - 1) * half_seqlen: (multiple_of - rank) * half_seqlen]
                     ))
                     tensors.append(tensor)
-                # When using tensor parallelism, the length of minibatch must be multiple of tp size so that the sequence can be evenly sharded.
+                # When using tensor parallelism, the length of minibatch 
+                # must be multiple of tp size so that the sequence can be 
+                # evenly sharded.
                 minibatch_length = sum([len(tensor) for tensor in tensors])
                 if minibatch_length % self.config.tp_size != 0:
                     pad_tokens = self.config.tp_size - minibatch_length % self.config.tp_size
@@ -331,36 +325,14 @@ class Worker:
             max_norm=self.config.max_grad_norm
         )
 
-        self.load_optimizer_to_gpu()
+        if getattr(self.config, "offload_optimizer", False):
+            load_optimizer_to_gpu(self.optimizer)
         self.optimizer.step()
         self.optimizer.zero_grad()
-        self.offload_optimizer_to_cpu()
+        if getattr(self.config, "offload_optimizer", False):
+            offload_optimizer_to_cpu(self.optimizer)
 
         return grad_norm.full_tensor().item()
-    
-    def offload_optimizer_to_cpu(self):
-
-        if not self.config.offload_optimizer:
-            return
-        for param_group in self.optimizer.param_groups:
-            for param in param_group["params"]:
-                state = self.optimizer.state[param]
-                for key, value in state.items():
-                    if isinstance(value, torch.Tensor):
-                        state[key] = value.to("cpu", non_blocking=True)
-
-    def load_optimizer_to_gpu(self):
-
-        if not self.config.offload_optimizer or not self.optimizer.state:
-            return
-        for param_group in self.optimizer.param_groups:
-            for param in param_group["params"]:
-                state = self.optimizer.state[param]
-                for key, value in state.items():
-                    if isinstance(value, torch.Tensor):
-                        state[key] = value.to(
-                            torch.cuda.current_device(), non_blocking=True
-                        )
 
     def tqdm(self, *args, **kwargs):
         return tqdm(
@@ -370,45 +342,6 @@ class Worker:
             disable=(dist.get_rank() != 0),
             **kwargs
         )
-
-    def gather_and_log(self, metrics, step):
-
-        metrics = {
-            k: gather_and_concat_list(v, self.device_mesh["dp"])
-            for k, v in metrics.items()
-        }
-
-        if dist.get_rank() == 0:
-            metrics = {
-                k: sum(v) / (1.0 if k == "loss" else len(v))
-                for k, v in metrics.items()
-            }
-            tqdm.write(f"Step {step + 1}, " + ", ".join([
-                f"{k}: {v:.3g}" for k, v in metrics.items()
-            ]))
-            wandb.log(metrics, step=step)
-
-    def gather_and_reduce(self, lst):
-
-        lst = gather_and_concat_list(lst, self.device_mesh["sp"])
-        if self.device_mesh["sp"].get_local_rank() == 0:
-            lst = gather_and_concat_list(lst, self.device_mesh["dp"])
-            if dist.get_rank() == 0:
-                return sum(lst)
-
-    def rank0_log(self, metrics, step):
-        
-        if not dist.get_rank() == 0:
-            return
-        
-        metrics = {
-            k: sum(v) / len(v)
-            for k, v in metrics.items()
-        }
-        tqdm.write(f"Step {step + 1}, " + ", ".join([
-            f"{k}: {v:.3g}" for k, v in metrics.items()
-        ]))
-        wandb.log(metrics, step=step)
 
     def save(self, step=None, rm=False):
 

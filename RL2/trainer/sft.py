@@ -7,6 +7,7 @@ from RL2.dataset import SFTDataset
 from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
+from RL2.utils.logging import gather_and_log
 from RL2.utils.timing import time_logger
 
 
@@ -47,7 +48,7 @@ class SFTTrainer(Trainer):
         grad_norm = self.actor.optimizer_step()
         self.scheduler.step()
         metrics["grad_norm"].append(grad_norm)
-        self.actor.gather_and_log(metrics, step)
+        gather_and_log(metrics, self.actor.device_mesh["dp"], step)
 
     def train(self):
 

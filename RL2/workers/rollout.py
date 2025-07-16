@@ -15,6 +15,10 @@ import wandb
 from RL2.workers import Worker
 from RL2.dataset import tokenize_messages
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
+from RL2.utils.offloading import (
+    offload_model_to_cpu, load_model_to_gpu
+)
+from RL2.utils.logging import gather_and_log
 from RL2.utils.timing import time_logger
 
 
@@ -190,7 +194,7 @@ class Rollout(Worker):
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
                 for k in metrics[0].keys()
             }
-            self.gather_and_log(metrics, step)
+            gather_and_log(metrics, self.device_mesh["dp"], step)
 
             if not train:
                 return
@@ -219,8 +223,8 @@ class Rollout(Worker):
     @time_logger("update_rollout")
     def update(self, actor, step):
 
-        if self.config.adv_estimator == "gae":
-            actor.load_model_to_gpu()
+        if getattr(actor.config, "offload_model", False) and self.config.adv_estimator == "gae":
+            load_model_to_gpu(actor.model)
 
         torch.cuda.empty_cache()
         # or llm.resume_memory_occupation() may OOM
@@ -249,5 +253,7 @@ class Rollout(Worker):
                     flush_cache=(idx == len(named_tensors) - 1)
                 )
         dist.barrier()
-        actor.offload_model_to_cpu()
+
+        if getattr(actor.config, "offload_model", False):
+            offload_model_to_cpu(actor.model)
         # Offload params here, or the params cannot be loaded.
