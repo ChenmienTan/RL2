@@ -8,6 +8,7 @@ from RL2.dataset import RMDataset
 from RL2.workers import Critic
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
+from RL2.utils.checkpointing import save_model_and_optimizer
 from RL2.utils.logging import gather_and_log
 from RL2.utils.timing import time_logger
 
@@ -64,9 +65,9 @@ class RMTrainer(Trainer):
                 step += 1
 
                 if self.critic.config.save_freq is not None and step % self.critic.config.save_freq == 0:
-                    self.critic.save(step, rm=True)
+                    save_model_and_optimizer(self.critic, step, rm=True)
 
-        self.critic.save(rm=True)
+        save_model_and_optimizer(self.critic, rm=True)
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)

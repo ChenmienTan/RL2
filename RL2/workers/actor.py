@@ -13,6 +13,7 @@ from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import (
     offload_model_to_cpu, load_model_to_gpu
 )
+from RL2.utils.checkpointing import save_model_and_optimizer
 from RL2.utils.logging import gather_and_reduce, rank0_log
 from RL2.utils.timing import time_logger
 
@@ -163,7 +164,7 @@ class Actor(Worker):
 
         rank0_log(metrics, step)
         if self.config.save_freq is not None and (step + 1) % self.config.save_freq == 0:
-            self.save(step)
+            save_model_and_optimizer(self, step)
 
         if getattr(self.config, "offload_model", False) and self.config.adv_estimator == "gae":
             offload_model_to_cpu(self.model)

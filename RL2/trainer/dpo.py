@@ -8,6 +8,7 @@ from RL2.dataset import DPODataset
 from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
+from RL2.utils.checkpointing import save_model_and_optimizer
 from RL2.utils.logging import gather_and_log
 from RL2.utils.timing import time_logger
 
@@ -70,9 +71,9 @@ class DPOTrainer(Trainer):
                 step += 1
 
                 if self.actor.config.save_freq is not None and step % self.actor.config.save_freq == 0:
-                    self.actor.save(step)
+                    save_model_and_optimizer(self.actor, step)
 
-        self.actor.save()
+        save_model_and_optimizer(self.actor)
 
 
 @hydra.main(config_path="config", config_name="dpo", version_base=None)
