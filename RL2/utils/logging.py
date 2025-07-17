@@ -3,6 +3,15 @@ from tqdm import tqdm
 import wandb
 from RL2.utils.comm import gather_and_concat_list
 
+def progress_bar(*args, **kwargs):
+    return tqdm(
+        *args,
+        position=1,
+        leave=False,
+        disable=(dist.get_rank() != 0),
+        **kwargs
+    )
+
 def gather_and_log(metrics, device_mesh, step):
 
     metrics = {

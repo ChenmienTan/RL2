@@ -8,7 +8,11 @@ from RL2.utils.offloading import (
     offload_model_to_cpu, load_model_to_gpu
 )
 from RL2.utils.checkpointing import save_model_and_optimizer
-from RL2.utils.logging import gather_and_reduce, rank0_log
+from RL2.utils.logging import (
+    progress_bar,
+    gather_and_reduce,
+    rank0_log
+)
 from RL2.utils.timing import time_logger
 
 
@@ -53,7 +57,7 @@ class Critic(Worker):
         minibatches = self.scatter_and_pack_data_list(data_list)
 
         self.model.eval()
-        for minibatch in self.tqdm(minibatches, desc="Compute values"):
+        for minibatch in progress_bar(minibatches, desc="Compute values"):
             minibatch["values"] = self.forward(minibatch)
         
         if getattr(self.config, "offload_model", False):
@@ -68,7 +72,7 @@ class Critic(Worker):
         batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
-        tbar = self.tqdm(
+        tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
             desc="Update critic"
         )

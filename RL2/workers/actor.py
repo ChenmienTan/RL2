@@ -14,7 +14,11 @@ from RL2.utils.offloading import (
     offload_model_to_cpu, load_model_to_gpu
 )
 from RL2.utils.checkpointing import save_model_and_optimizer
-from RL2.utils.logging import gather_and_reduce, rank0_log
+from RL2.utils.logging import (
+    progress_bar,
+    gather_and_reduce,
+    rank0_log
+)
 from RL2.utils.timing import time_logger
 
 
@@ -87,7 +91,7 @@ class Actor(Worker):
         prefix = "old" if self.train else "ref"
 
         self.model.eval()
-        for minibatch in self.tqdm(
+        for minibatch in progress_bar(
             minibatches, desc=f"Compute {prefix} logps"
         ):
             minibatch[f"{prefix}_logps"] = self.forward(minibatch)
@@ -109,7 +113,7 @@ class Actor(Worker):
         batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
-        tbar = self.tqdm(
+        tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
             desc="Update actor"
         )

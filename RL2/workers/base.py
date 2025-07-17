@@ -4,7 +4,6 @@ import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
 import transformers
-from tqdm import tqdm
 from RL2.utils.models import prepare_tp_model, prepare_dp_model
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
@@ -329,11 +328,3 @@ class Worker:
 
         return grad_norm.full_tensor().item()
 
-    def tqdm(self, *args, **kwargs):
-        return tqdm(
-            *args,
-            position=1,
-            leave=False,
-            disable=(dist.get_rank() != 0),
-            **kwargs
-        )

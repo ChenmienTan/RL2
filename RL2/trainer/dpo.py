@@ -9,7 +9,7 @@ from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
 from RL2.utils.checkpointing import save_model_and_optimizer
-from RL2.utils.logging import gather_and_log
+from RL2.utils.logging import progress_bar, gather_and_log
 from RL2.utils.timing import time_logger
 
 
@@ -33,7 +33,7 @@ class DPOTrainer(Trainer):
 
         minibatches = self.actor.scatter_and_pack_data_list(data_list, pair=True)
         metrics = defaultdict(list)
-        for minibatch in self.actor.tqdm(
+        for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
             logps = self.actor.forward(minibatch)
