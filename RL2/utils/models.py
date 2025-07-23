@@ -103,17 +103,23 @@ def prepare_tp_model(model, device_mesh):
     assert model.config.num_key_value_heads % device_mesh.size() == 0, \
         f"Key and value heads {model.config.num_key_value_heads} must be divisible by tensor parallelism size {device_mesh.size()}."
 
-    if any(
-        isinstance(model, LlamaForCausalLM),
-        isinstance(model, Qwen2ForCausalLM),
-        isinstance(model, Qwen3ForCausalLM),
-    ):
+    if any([
+        isinstance(model, cls)
+        for cls in [
+            LlamaForCausalLM,
+            Qwen2ForCausalLM,
+            Qwen3ForCausalLM
+        ]
+    ]):
         prepare_llama_tp_actor(model, device_mesh)
-    elif any(
-        isinstance(model, LlamaForTokenClassification),
-        isinstance(model, Qwen2ForTokenClassification),
-        isinstance(model, Qwen3ForTokenClassification),
-    ):
+    elif any([
+        isinstance(model, cls)
+        for cls in [
+            LlamaForTokenClassification,
+            Qwen2ForTokenClassification,
+            Qwen3ForTokenClassification
+        ]
+    ]):
         prepare_llama_tp_critic(model, device_mesh)
     else:
         raise NotImplementedError(
@@ -122,9 +128,14 @@ def prepare_tp_model(model, device_mesh):
     
 def prepare_dp_model(model, mixed_precision: bool, device_mesh):
 
+    for module in model.modules():
+        if module.__class__.__name__ == model._no_split_modules[0]:
+            transformer_layer_cls = module.__class__
+            break
+
     auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
-        transformer_layer_cls={model._no_split_modules[0]}
+        transformer_layer_cls={transformer_layer_cls}
     )
 
     kwargs = {
