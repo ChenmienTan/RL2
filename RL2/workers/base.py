@@ -54,7 +54,7 @@ class Worker:
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
 
-        prepare_dp_model(
+        self.model = prepare_dp_model(
             self.model, self.train, self.model_device_mesh["ddp", "fsdp"]
         )
 
@@ -306,4 +306,4 @@ class Worker:
         if getattr(self.config, "offload_optimizer", False):
             offload_optimizer_to_cpu(self.optimizer)
 
-        return grad_norm.full_tensor().item()
+        return grad_norm.item()

@@ -1,3 +1,4 @@
+import functools
 import torch
 from torch.distributed.tensor.placement_types import Shard
 from torch.distributed.tensor.parallel import (
@@ -6,13 +7,20 @@ from torch.distributed.tensor.parallel import (
     SequenceParallel,
     parallelize_module
 )
-from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+from torch.distributed.fsdp import (
+    FullyShardedDataParallel as FSDP,
+    MixedPrecision,
+    ShardingStrategy
+)
 from transformers import (
     LlamaForCausalLM,
     LlamaForTokenClassification,
     Qwen2ForCausalLM,
-    Qwen2ForTokenClassification
+    Qwen2ForTokenClassification,
+    Qwen3ForCausalLM,
+    Qwen3ForTokenClassification
 )
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 def prepare_lora_model(model, task_type: str, config):
 
@@ -95,9 +103,17 @@ def prepare_tp_model(model, device_mesh):
     assert model.config.num_key_value_heads % device_mesh.size() == 0, \
         f"Key and value heads {model.config.num_key_value_heads} must be divisible by tensor parallelism size {device_mesh.size()}."
 
-    if isinstance(model, LlamaForCausalLM) or isinstance(model, Qwen2ForCausalLM):
+    if any(
+        isinstance(model, LlamaForCausalLM),
+        isinstance(model, Qwen2ForCausalLM),
+        isinstance(model, Qwen3ForCausalLM),
+    ):
         prepare_llama_tp_actor(model, device_mesh)
-    elif isinstance(model, LlamaForTokenClassification) or isinstance(model, Qwen2ForTokenClassification):
+    elif any(
+        isinstance(model, LlamaForTokenClassification),
+        isinstance(model, Qwen2ForTokenClassification),
+        isinstance(model, Qwen3ForTokenClassification),
+    ):
         prepare_llama_tp_critic(model, device_mesh)
     else:
         raise NotImplementedError(
@@ -106,16 +122,23 @@ def prepare_tp_model(model, device_mesh):
     
 def prepare_dp_model(model, mixed_precision: bool, device_mesh):
 
-    kwargs = {"mesh": device_mesh}
+    auto_wrap_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={model._no_split_modules[0]}
+    )
+
+    kwargs = {
+        "auto_wrap_policy": auto_wrap_policy,
+        "sharding_strategy": ShardingStrategy.HYBRID_SHARD,
+        "device_mesh": device_mesh,
+        "device_id": torch.cuda.current_device()
+    }
+
     if mixed_precision:
-        kwargs["mp_policy"] = MixedPrecisionPolicy(
+        kwargs["mixed_precision"] = MixedPrecision(
             param_dtype=torch.bfloat16,
             reduce_dtype=torch.bfloat16,
-            output_dtype=torch.bfloat16
+            buffer_dtype=torch.bfloat16
         )
-    for module in model.modules():
-        if module.__class__.__name__ in model._no_split_modules or (
-            isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings
-        ):
-            fully_shard(module, **kwargs)
-    fully_shard(model, **kwargs) 
+
+    return FSDP(model, **kwargs)
