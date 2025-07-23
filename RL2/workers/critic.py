@@ -3,6 +3,7 @@ import torch
 from transformers import AutoModelForTokenClassification
 from RL2.workers import Worker
 from RL2.utils.models import prepare_lora_model
+from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import (
     offload_model_to_cpu, load_model_to_gpu
@@ -79,7 +80,7 @@ class Critic(Worker):
         metrics = defaultdict(list)
         for batch in batches:
 
-            total_actions = self.count_total_actions(batch)
+            total_actions = count_total_actions(batch, self.device_mesh)
             metric = defaultdict(list)
             for minibatch in batch:
 

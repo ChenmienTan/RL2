@@ -9,6 +9,7 @@ from RL2.algs import (
     compute_entropy,
     compute_approx_kl
 )
+from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import (
     offload_model_to_cpu, load_model_to_gpu
@@ -120,7 +121,7 @@ class Actor(Worker):
         metrics = defaultdict(list)
         for update, batch in enumerate(batches):
             
-            total_actions = self.count_total_actions(batch)
+            total_actions = count_total_actions(batch, self.device_mesh)
             metric = defaultdict(list)
             for minibatch in batch:
 

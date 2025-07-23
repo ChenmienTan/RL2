@@ -288,26 +288,6 @@ class Worker:
                     data_list = data_list[:-self.padding_trajectories]
                 return data_list
             
-    def count_total_actions(self, minibatches):
-        
-        total_actions = sum(
-            [minibatch["action_mask"].sum() for minibatch in minibatches]
-        )
-        total_actions = torch.Tensor(
-            [total_actions]
-        ).to(torch.cuda.current_device())
-        dist.all_reduce(
-            total_actions,
-            op=dist.ReduceOp.SUM,
-            group=self.device_mesh["sp"].get_group()
-        )
-        dist.all_reduce(
-            total_actions,
-            op=dist.ReduceOp.SUM,
-            group=self.device_mesh["dp"].get_group()
-        )
-        return total_actions.to("cpu").item()
-    
     def backward(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11
         (self.dp_size * self.config.sp_size * loss).backward()
@@ -327,4 +307,3 @@ class Worker:
             offload_optimizer_to_cpu(self.optimizer)
 
         return grad_norm.full_tensor().item()
-
