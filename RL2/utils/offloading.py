@@ -1,16 +1,25 @@
 import torch
+from torch.distributed.fsdp._runtime_utils import _lazy_init
 
 def offload_model_to_cpu(model):
 
-    for param in model.parameters():
-        param.data = param.data.to("cpu", non_blocking=True)
+    _lazy_init(model, model)
+    for handle in model._all_handles:
+        if handle._offload_params:
+            continue
+        flat_param = handle.flat_param
+        handle.flat_param_to(torch.device("cpu"), non_blocking=True)
+        flat_param._local_shard = flat_param.data
 
 def load_model_to_gpu(model):
     
-    for param in model.parameters():
-        param.data = param.data.to(
-            torch.cuda.current_device(), non_blocking=True
-        )
+    _lazy_init(model, model)
+    for handle in model._all_handles:
+        if handle._offload_params:
+            continue
+        flat_param = handle.flat_param
+        handle.flat_param_to(torch.cuda.current_device(), non_blocking=True)
+        flat_param._local_shard = flat_param.data
 
 def offload_optimizer_to_cpu(optimizer):
 
