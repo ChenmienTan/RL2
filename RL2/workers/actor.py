@@ -39,7 +39,6 @@ class Actor(Worker):
         # TODO (P1): initialize model on meta device
         self.model = model_cls.from_pretrained(
             config.model_name,
-            torch_dtype=torch.float32 if train else torch.bfloat16,
             trust_remote_code=True,
             attn_implementation="flash_attention_2"
         )

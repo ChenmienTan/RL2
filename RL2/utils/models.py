@@ -126,7 +126,7 @@ def prepare_tp_model(model, device_mesh):
             f"Tensor parallelism is not supported for {model.__class__.__name__}."
         )
     
-def prepare_dp_model(model, mixed_precision: bool, device_mesh):
+def prepare_dp_model(model, device_mesh):
 
     for module in model.modules():
         if module.__class__.__name__ == model._no_split_modules[0]:
@@ -138,18 +138,17 @@ def prepare_dp_model(model, mixed_precision: bool, device_mesh):
         transformer_layer_cls={transformer_layer_cls}
     )
 
-    kwargs = {
-        "auto_wrap_policy": auto_wrap_policy,
-        "sharding_strategy": ShardingStrategy.HYBRID_SHARD,
-        "device_mesh": device_mesh,
-        "device_id": torch.cuda.current_device()
-    }
+    mixed_precision = MixedPrecision(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.bfloat16,
+        buffer_dtype=torch.bfloat16
+    )
 
-    if mixed_precision:
-        kwargs["mixed_precision"] = MixedPrecision(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.bfloat16,
-            buffer_dtype=torch.bfloat16
-        )
-
-    return FSDP(model, **kwargs)
+    return FSDP(
+        model,
+        auto_wrap_policy=auto_wrap_policy,
+        sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+        mixed_precision=mixed_precision,
+        device_mesh=device_mesh,
+        device_id=torch.cuda.current_device()
+    )
