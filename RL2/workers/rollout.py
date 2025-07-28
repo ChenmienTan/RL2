@@ -6,6 +6,7 @@ import importlib
 from collections import defaultdict
 import torch
 import torch.distributed as dist
+from torch.distributed.tensor import DTensor
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
@@ -234,7 +235,7 @@ class Rollout(Worker):
         named_tensors = [(k, v) for k, v in actor.model.state_dict().items()]
         for idx, (name, tensor) in enumerate(named_tensors):
             serialized_tensor = MultiprocessingSerializer.serialize(
-                tensor.full_tensor()
+                tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )
             serialized_tensors = [
                 None for _ in range(self.device_mesh["tp"].size())
