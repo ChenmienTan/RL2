@@ -27,7 +27,6 @@ actor:
   adv_estimator: ${adv.estimator}
   save_dir: ckpts/${trainer.experiment_name}/actor
   save_freq: null
-  save_optimizer: true
 
   kl:
     coef: 0.0
@@ -87,7 +86,6 @@ critic:
   offload_optimizer: ${actor.offload_optimizer}
   save_dir: ckpts/${trainer.experiment_name}/critic
   save_freq: ${actor.save_freq}
-  save_optimizer: ${actor.save_optimizer}
 
   lora:
     rank: 0

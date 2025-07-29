@@ -20,7 +20,6 @@ actor:
   offload_optimizer: true
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null
-  save_optimizer: true
 
   lora:
     rank: 0
