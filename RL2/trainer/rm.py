@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
-from RL2.dataset import RMDataset
+from RL2.dataset import RMDataset, get_dataloader
 from RL2.workers import Critic
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
@@ -22,7 +22,7 @@ class RMTrainer(Trainer):
         dataset = RMDataset(
             config.data.path, self.critic.tokenizer, config.data.max_length
         )
-        self.dataloader = self.prepare_dataloader(
+        self.dataloader = get_dataloader(
             dataset, config.data.batch_size, True
         )
         self.scheduler = self.prepare_scheduler(self.critic)

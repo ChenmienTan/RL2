@@ -3,7 +3,7 @@ import torch.distributed as dist
 from tqdm import tqdm
 import wandb
 from RL2.trainer import Trainer
-from RL2.dataset import RLDataset
+from RL2.dataset import RLDataset, get_dataloader
 from RL2.workers import Actor, Rollout, Critic
 from RL2.algs import (
     compute_approx_kl,
@@ -38,7 +38,7 @@ class PPOTrainer(Trainer):
             self.config.data.responses_per_prompt if train else 1
         )
 
-        return super().prepare_dataloader(
+        return get_dataloader(
             dataset,
             self.config.data.prompts_per_rollout
             if train else len(dataset),

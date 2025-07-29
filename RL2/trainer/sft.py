@@ -3,7 +3,7 @@ from collections import defaultdict
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
-from RL2.dataset import SFTDataset
+from RL2.dataset import SFTDataset, get_dataloader
 from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
@@ -21,7 +21,7 @@ class SFTTrainer(Trainer):
         dataset = SFTDataset(
             config.data.path, self.actor.tokenizer, config.data.max_length
         )
-        self.dataloader = self.prepare_dataloader(
+        self.dataloader = get_dataloader(
             dataset, config.data.batch_size, True
         )
         self.scheduler = self.prepare_scheduler(self.actor)

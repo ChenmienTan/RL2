@@ -1,7 +1,7 @@
 import os
 import datasets
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 # TODO (P1): support concatnating multiple datasets
 def load_dataset(data_path):
@@ -18,6 +18,16 @@ def load_dataset(data_path):
         return datasets.load_dataset(ext, data_files=data_path, split=split)
     else:
         return datasets.load_dataset(data_path, split=split)
+
+# TODO (P1): resume training
+def get_dataloader(dataset, batch_size, shuffle):
+    return DataLoader(
+        dataset,
+        batch_size,
+        shuffle=shuffle,
+        drop_last=True,
+        collate_fn=dataset.collate_fn
+    )
 
 def tokenize_messages(
     tokenizer,
