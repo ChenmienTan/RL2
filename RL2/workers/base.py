@@ -1,8 +1,14 @@
 from typing import List
+import os
 import math
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+    get_optimizer_state_dict
+)
 import transformers
 from RL2.utils.models import prepare_tp_model, prepare_dp_model
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
@@ -294,9 +300,61 @@ class Worker:
             max_norm=self.config.max_grad_norm
         )
 
-        load_optimizer_to_device(self, torch.cuda.current_device())
+        load_optimizer_to_device(
+            self, torch.cuda.current_device()
+        )
         self.optimizer.step()
         self.optimizer.zero_grad()
         load_optimizer_to_device(self, "cpu")
 
         return grad_norm.item()
+    
+    def save(self, step=None, rm=False):
+
+        if step is not None and self.config.save_freq is not None and step % self.config.save_freq != 0:
+            return
+        
+        path = self.config.save_dir + (
+            f"/step{step}" if step is not None else "/latest"
+        )
+        os.makedirs(path, exist_ok=True)
+
+        options = StateDictOptions(
+            full_state_dict=True, cpu_offload=True
+        )
+        state_dict = get_model_state_dict(
+            self.model, options=options
+        )
+        if dist.get_rank() == 0:
+
+            self.tokenizer.save_pretrained(f"{path}/model")
+            # unwrap the model
+            model_to_save = self.model.module
+            if rm:
+                # For RM, we load token classification model for simplicity 
+                # but save sequence classification model for compatibility.
+                model_cls_name = model_to_save.__class__.__name__.replace(
+                    "Token", "Sequence"
+                )
+                model_cls = getattr(transformers, model_cls_name)
+                with torch.device("meta"):
+                    model_to_save = model_cls._from_config(model_to_save.config)
+            model_to_save.save_pretrained(
+                f"{path}/model", state_dict=state_dict
+            )
+
+        dist.barrier()
+
+        # TODO (P1): save optimizer state distributionally
+        state_dict = get_optimizer_state_dict(
+            self.model, self.optimizer, options=options
+        )
+        if dist.get_rank() == 0:
+            
+            os.makedirs(f"{path}/optimizer", exist_ok=True)
+            torch.save(
+                state_dict,
+                f"{path}/optimizer/state_dict.pt"
+            )
+
+        dist.barrier()

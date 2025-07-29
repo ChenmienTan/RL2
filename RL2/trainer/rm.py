@@ -6,9 +6,8 @@ from tqdm import tqdm
 from RL2.trainer import Trainer
 from RL2.dataset import RMDataset, get_dataloader
 from RL2.workers import Critic
-from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
-from RL2.utils.checkpointing import save
+from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -66,9 +65,8 @@ class RMTrainer(Trainer):
             ):
                 self.update_critic(data_list, step)
                 step += 1
-
-                save(self.critic, step, rm=True)
-        save(self.critic, rm=True)
+                self.critic.save(step, rm=True)
+        self.critic.save(rm=True)
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)

@@ -5,9 +5,8 @@ from tqdm import tqdm
 from RL2.trainer import Trainer
 from RL2.dataset import SFTDataset, get_dataloader
 from RL2.workers import Actor
-from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
-from RL2.utils.checkpointing import save
+from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -65,9 +64,8 @@ class SFTTrainer(Trainer):
             ):
                 self.update_actor(data_list, step)
                 step += 1
-
-                save(self.actor, step)
-        save(self.actor)
+                self.actor.save(step)
+        self.actor.save()
 
 
 @hydra.main(config_path="config", config_name="sft", version_base=None)
