@@ -68,9 +68,9 @@ class DPOTrainer(Trainer):
                 desc=f"Epoch {epoch + 1}",
                 disable=(dist.get_rank() != 0)
             ):
+                step += 1
                 data_list = self.ref_actor.compute_logps(data_list, step)
                 self.update_actor(data_list, step)
-                step += 1
                 self.actor.save(step)
         self.actor.save()
 

@@ -92,6 +92,7 @@ class PPOTrainer(Trainer):
                 desc=f"Epoch {epoch + 1}",
                 disable=(dist.get_rank() != 0)
             ):
+                step += 1
 
                 data_list = self.rollout(data_list, True, step)
 
@@ -112,7 +113,6 @@ class PPOTrainer(Trainer):
                     self.critic.update(data_list, step)
                 self.rollout.update(self.actor, step)
 
-                step += 1
                 if step % self.config.trainer.test_freq == 0:
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)

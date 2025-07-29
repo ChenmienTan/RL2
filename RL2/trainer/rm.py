@@ -63,8 +63,8 @@ class RMTrainer(Trainer):
                 desc=f"Epoch {epoch + 1}",
                 disable=(dist.get_rank() != 0)
             ):
-                self.update_critic(data_list, step)
                 step += 1
+                self.update_critic(data_list, step)
                 self.critic.save(step, rm=True)
         self.critic.save(rm=True)
 
