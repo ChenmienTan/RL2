@@ -176,7 +176,3 @@ def compute_reinforce_adv(
 
     for ex, advantage in zip(data_list, advantages.flatten()):
         ex["advantages"] = advantage * ex["action_mask"]
-
-def fill_zero_adv(data_list):
-    for ex in data_list:
-        ex["advantages"] = torch.zeros_like(ex["rewards"])
