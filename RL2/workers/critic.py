@@ -49,7 +49,6 @@ class Critic(Worker):
     @time_logger("compute_values")
     @torch.no_grad()
     def compute_values(self, data_list, step):
-
         load_model_to_device(self, torch.cuda.current_device())
         minibatches = self.scatter_and_pack_data_list(data_list)
 

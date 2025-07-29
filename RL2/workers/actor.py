@@ -3,14 +3,14 @@ import torch
 from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
 from RL2.utils.models import prepare_lora_model
+from RL2.utils.sequences import count_total_actions
+from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.algs import (
     compute_logsumexp,
     gather_action_logits,
     compute_entropy,
     compute_approx_kl
 )
-from RL2.utils.sequences import count_total_actions
-from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import load_model_to_device
 from RL2.utils.logging import (
     progress_bar,
@@ -61,6 +61,8 @@ class Actor(Worker):
         ).logits.to(torch.float32) / getattr(
             self.config, "temperature", 1.0
         )
+        # bfloat16 is unstable for the subsequent `logsumexp` operation.
+        # See https://github.com/OpenRLHF/OpenRLHF/pull/634.
         
         logsumexp = compute_logsumexp(logits, self.device_mesh["tp"])
         action_logits = gather_action_logits(
@@ -119,20 +121,18 @@ class Actor(Worker):
             for minibatch in batch:
 
                 logps, entropy = self.forward(minibatch, return_entropy=True)
-                if update == 0:
-                    loss = - (minibatch["advantages"] * logps).sum() / total_actions
-                    clip_ratio = torch.zeros_like(loss)
-                else:
-                    ratio = (logps - minibatch["old_logps"]).exp()
-                    clipped_ratio = torch.clamp(
-                        ratio,
-                        1 - self.config.clip,
-                        1 + self.config.clip
-                    )
-                    objective = minibatch["advantages"] * ratio
-                    clipped_objective = minibatch["advantages"] * clipped_ratio
-                    loss = - torch.min(objective, clipped_objective).sum() / total_actions
-                    clip_ratio = (objective > clipped_objective).sum() / total_actions
+                ratio = torch.exp(
+                    logps - logps.detach() if update == 0 else minibatch["old_logps"]
+                )
+                clipped_ratio = torch.clamp(
+                    ratio,
+                    1 - self.config.clip,
+                    1 + self.config.clip
+                )
+                objective = minibatch["advantages"] * ratio
+                clipped_objective = minibatch["advantages"] * clipped_ratio
+                loss = - torch.min(objective, clipped_objective).sum() / total_actions
+                clip_ratio = (objective > clipped_objective).sum() / total_actions
 
                 entropy_loss = - entropy.sum() / total_actions
                 loss = loss + self.config.entropy.coef * entropy_loss
