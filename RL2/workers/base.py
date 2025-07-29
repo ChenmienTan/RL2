@@ -67,6 +67,7 @@ class Worker:
             )
 
             if self.config.optimizer_dir is not None:
+                # TODO (P0): load integral state dict
                 self.optimizer.load_state_dict(
                     torch.load(
                         f"{self.config.optimizer_dir}/optimizer_rank{dist.get_rank()}.pt"
