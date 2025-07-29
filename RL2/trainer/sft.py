@@ -7,7 +7,7 @@ from RL2.dataset import SFTDataset
 from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
-from RL2.utils.checkpointing import save_model_and_optimizer
+from RL2.utils.checkpointing import save
 from RL2.utils.logging import progress_bar, gather_and_log
 from RL2.utils.timing import time_logger
 
@@ -63,10 +63,8 @@ class SFTTrainer(Trainer):
                 self.update_actor(data_list, step)
                 step += 1
 
-                if self.actor.config.save_freq is not None and step % self.actor.config.save_freq == 0:
-                    save_model_and_optimizer(self.actor, step)
-
-        save_model_and_optimizer(self.actor)
+                save(self.actor, step)
+        save(self.actor)
 
 
 @hydra.main(config_path="config", config_name="sft", version_base=None)
