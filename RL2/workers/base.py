@@ -311,7 +311,9 @@ class Worker:
     
     def save(self, step=None, rm=False):
 
-        if step is not None and self.config.save_freq is not None and step % self.config.save_freq != 0:
+        if step is not None and (
+            self.config.save_freq is None or step % self.config.save_freq != 0
+        ):
             return
         
         path = self.config.save_dir + (

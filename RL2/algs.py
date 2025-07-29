@@ -28,8 +28,8 @@ def compute_logsumexp(logits, device_mesh, chunk_size=1024):
     # and then perform logsumexp across devices, which is equivalent to 
     # performing logsumexp over the entire vocabulary.
 
-    # Direct logsumexp over the entire sequence suffer high memory peak.
-    # See https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881
+    # Direct logsumexp over the entire sequence suffers high memory peak.
+    # See https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881.
     logsumexps = []
     for start in range(0, logits.shape[1], chunk_size):
         logsumexp = torch.logsumexp(

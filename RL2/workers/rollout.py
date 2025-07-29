@@ -157,7 +157,7 @@ class Rollout(Worker):
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
 
-        # Before each worker operation, the data is distributed from rank 0
+        # The data is distributed from rank 0 before each worker operation
         # and gathered before the next operation, which facilitates to do
         # model-agnostic operations, e.g., computing advantages, globally 
         # and guarantees the load balancing across all model computations.
