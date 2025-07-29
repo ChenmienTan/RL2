@@ -5,9 +5,7 @@ from RL2.workers import Worker
 from RL2.utils.models import prepare_lora_model
 from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
-from RL2.utils.offloading import (
-    offload_model_to_cpu, load_model_to_gpu
-)
+from RL2.utils.offloading import load_model_to_device
 from RL2.utils.checkpointing import save
 from RL2.utils.logging import (
     progress_bar,
@@ -53,23 +51,20 @@ class Critic(Worker):
     @torch.no_grad()
     def compute_values(self, data_list, step):
 
-        if getattr(self.config, "offload_model", False):
-            load_model_to_gpu(self.model)
+        load_model_to_device(self, torch.cuda.current_device())
         minibatches = self.scatter_and_pack_data_list(data_list)
 
         self.model.eval()
         for minibatch in progress_bar(minibatches, desc="Compute values"):
             minibatch["values"] = self.forward(minibatch)
         
-        if getattr(self.config, "offload_model", False):
-            offload_model_to_cpu(self.model)
+        load_model_to_device(self, "cpu")
         return self.unpack_and_gather_data_list(minibatches)
 
     @time_logger("update_critic")
     def update(self, data_list, step: int):
 
-        if getattr(self.config, "offload_model", False):
-            load_model_to_gpu(self.model)
+        load_model_to_device(self, torch.cuda.current_device())
         batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()
@@ -112,5 +107,4 @@ class Critic(Worker):
         rank0_log(metrics, step)
         save(self, step)
 
-        if getattr(self.config, "offload_model", False):
-            offload_model_to_cpu(self.model)
+        load_model_to_device(self, "cpu")

@@ -7,11 +7,7 @@ import transformers
 from RL2.utils.models import prepare_tp_model, prepare_dp_model
 from RL2.utils.seqlen_balance import get_seqlen_balanced_partitions
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
-from RL2.utils.offloading import (
-    offload_model_to_cpu,
-    offload_optimizer_to_cpu,
-    load_optimizer_to_gpu
-)
+from RL2.utils.offloading import load_model_to_device, load_optimizer_to_device
 
 class Worker:
 
@@ -73,11 +69,9 @@ class Worker:
                         f"{self.config.optimizer_dir}/optimizer_rank{dist.get_rank()}.pt"
                     )
                 )
-                if getattr(self.config, "offload_optimizer", False):
-                    load_optimizer_to_gpu(self.optimizer)
+                load_optimizer_to_device(self, "cpu")
 
-        if getattr(self.config, "offload_model", False):
-            offload_model_to_cpu(self.model)
+        load_model_to_device(self, "cpu")
 
     def scatter_and_pack_data_list(self, data_list, pack_minibatches=False, pair=False):
 
@@ -300,11 +294,9 @@ class Worker:
             max_norm=self.config.max_grad_norm
         )
 
-        if getattr(self.config, "offload_optimizer", False):
-            load_optimizer_to_gpu(self.optimizer)
+        load_optimizer_to_device(self, torch.cuda.current_device())
         self.optimizer.step()
         self.optimizer.zero_grad()
-        if getattr(self.config, "offload_optimizer", False):
-            offload_optimizer_to_cpu(self.optimizer)
+        load_optimizer_to_device(self, "cpu")
 
         return grad_norm.item()
