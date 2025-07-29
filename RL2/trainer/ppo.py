@@ -12,7 +12,7 @@ from RL2.algs import (
     fill_zero_adv
 )
 from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.timing import time_logger
+from RL2.utils.logging import time_logger
 
 
 class PPOTrainer(Trainer):

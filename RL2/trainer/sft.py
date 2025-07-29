@@ -8,8 +8,11 @@ from RL2.workers import Actor
 from RL2.utils.comm import initialize_global_process_group
 from RL2.algs import sequence_all_reduce
 from RL2.utils.checkpointing import save
-from RL2.utils.logging import progress_bar, gather_and_log
-from RL2.utils.timing import time_logger
+from RL2.utils.logging import (
+    progress_bar,
+    time_logger,
+    gather_and_log
+)
 
 
 class SFTTrainer(Trainer):

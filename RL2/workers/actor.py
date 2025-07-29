@@ -15,10 +15,10 @@ from RL2.utils.offloading import load_model_to_device
 from RL2.utils.checkpointing import save
 from RL2.utils.logging import (
     progress_bar,
+    time_logger,
     gather_and_reduce,
     rank0_log
 )
-from RL2.utils.timing import time_logger
 
 
 class Actor(Worker):

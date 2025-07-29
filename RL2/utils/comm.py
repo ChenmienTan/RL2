@@ -57,7 +57,7 @@ def gather_and_concat_list(lst, device_mesh=None):
         is_dst = device_mesh.get_local_rank() == 0
         dst = None
         group = device_mesh.get_group()
-        group_dst= 0
+        group_dst = 0
     
     lists = [None] * world_size if is_dst else None
     dist.gather_object(
