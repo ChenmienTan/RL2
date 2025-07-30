@@ -141,7 +141,9 @@ class Worker:
         )
 
     def unpack_and_gather_data_list(self, minibatches):
-                
+        
+        if self.device_mesh["tp"].get_local_rank() != 0:
+            return
         data_list = split_minibatches_into_data_list(minibatches)
         data_list = gather_data_list_along_sp_dim(
             data_list, self.device_mesh["sp"]
