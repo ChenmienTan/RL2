@@ -11,7 +11,7 @@ actor:
   ddp_size: 1
   tp_size: 1
   sp_size: 1
-  optimizer_dir: null
+  load_ckpt: true
   max_length_per_device: null
   lr: 5e-6
   weight_decay: 1e-2

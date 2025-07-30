@@ -12,6 +12,7 @@ from RL2.algs import (
     compute_approx_kl
 )
 from RL2.utils.offloading import load_model_to_device
+from RL2.utils.checkpointing import save_ckpt
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -160,7 +161,7 @@ class Actor(Worker):
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-        self.save(step)
+        save_ckpt(self, step)
 
         if self.config.adv_estimator == "gae":
             load_model_to_device(self, "cpu")

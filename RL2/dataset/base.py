@@ -19,7 +19,7 @@ def load_dataset(data_path):
     else:
         return datasets.load_dataset(data_path, split=split)
 
-# TODO (P1): resume training
+# TODO (P0): resume training
 def get_dataloader(dataset, batch_size, shuffle):
     return DataLoader(
         dataset,
@@ -52,7 +52,7 @@ def tokenize_messages(
                     tool=tool,
                     add_generation_prompt=idx + 1 < len(messages) and messages[idx + 1]["role"] == "assistant"
                 )
-                # TODO (P1): check tokenizer of Qwen3-235B-A22B-Instruct-2507
+                # TODO (P0): check tokenizer of Qwen3-235B-A22B-Instruct-2507
                 assert next_states[:len(states)] == states, \
                     "Your tokenizer should be increasing, i.e., adding a new message should not change the tokenization of previous messages. For example, if you use Qwen3 in multi-turn cases, previous thinking may be eliminated. In this case, you may set `tokenizer_name=Chenmien/Qwen3-Increasing-Tokenizer`."
                 state = next_states[len(states):]
