@@ -45,7 +45,7 @@ def gather_and_log(metrics, device_mesh, step):
             k: sum(v) / (1.0 if k == "loss" else len(v))
             for k, v in metrics.items()
         }
-        tqdm.write(f"Step {step + 1}, " + ", ".join([
+        tqdm.write(f"Step {step}, " + ", ".join([
             f"{k}: {v:.3g}" for k, v in metrics.items()
         ]))
         wandb.log(metrics, step=step)
@@ -67,7 +67,7 @@ def rank0_log(metrics, step):
         k: sum(v) / len(v)
         for k, v in metrics.items()
     }
-    tqdm.write(f"Step {step + 1}, " + ", ".join([
+    tqdm.write(f"Step {step}, " + ", ".join([
         f"{k}: {v:.3g}" for k, v in metrics.items()
     ]))
     wandb.log(metrics, step=step)
