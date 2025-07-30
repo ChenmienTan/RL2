@@ -25,7 +25,6 @@ class Rollout(Worker):
     def __init__(self, config):
         super().__init__(config, None)
         
-        # TODO (P1): support multi-node inference.
         self.prepare_environment_variables()
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.prepare_environment()

@@ -33,7 +33,6 @@ class Actor(Worker):
         else:
             model_cls = AutoModelForCausalLM
 
-        # TODO (P1): initialize model on meta device
         self.model = model_cls.from_pretrained(
             config.model_name,
             trust_remote_code=True,
