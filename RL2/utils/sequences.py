@@ -136,7 +136,7 @@ def scatter_data_lists_along_tp_dim(data_lists, device_mesh):
         "group": device_mesh.get_group(),
         "group_src": 0
     }
-    dist.boardcast(n_minibatches, **kwargs)
+    dist.broadcast(n_minibatches, **kwargs)
 
     if device_mesh.get_local_rank() != 0:
         data_lists = n_minibatches.item() * [None]
