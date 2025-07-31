@@ -63,7 +63,8 @@ class RMTrainer(Trainer):
             for data_list in tqdm(
                 self.dataloader,
                 desc=f"Epoch {epoch + 1}",
-                disable=(dist.get_rank() != 0)
+                disable=(dist.get_rank() != 0),
+                initial=step % len(self.dataloader)
             ):
                 step += 1
                 self.update_critic(data_list, step)
