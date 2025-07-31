@@ -10,16 +10,13 @@ critic:
   ddp_size: 1
   tp_size: 1
   sp_size: 1
-  load_ckpt: true
   max_length_per_device: null
   lr: 1e-5
   weight_decay: 1e-2
   max_grad_norm: 1.0
   warmup_ratio: 0.1
   offload_optimizer: true
-  save_dir: ckpts/${trainer.experiment_name}
-  save_freq: null
-
+  
   lora:
     rank: 0
     alpha: 16
@@ -29,5 +26,8 @@ critic:
 trainer:
   project: null
   experiment_name: null
+  load_ckpt_from_dir: null
   n_epochs: 1
+  save_dir: ckpts/${trainer.experiment_name}
+  save_freq: null
   disable_wandb: false

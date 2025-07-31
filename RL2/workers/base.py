@@ -62,28 +62,12 @@ class Worker:
             self.model, self.model_device_mesh["ddp", "fsdp"]
         )
 
-        if self.config.load_ckpt:
-            latest_ckpt = find_latest_ckpt(self.config.save_dir)
-            if latest_ckpt is not None:
-                self.model.load_state_dict(
-                    torch.load(f"{latest_ckpt}/model/rank{dist.get_rank()}.pt")
-                )
-
         if self.train:
-
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=self.config.lr,
                 weight_decay=self.config.weight_decay
             )
-
-            if self.config.load_ckpt and latest_ckpt is not None:
-                self.optimizer.load_state_dict(
-                    torch.load(
-                        f"{latest_ckpt}/optimizer/rank{dist.get_rank()}.pt"
-                    )
-                )
-                load_optimizer_to_device(self, "cpu")
 
         load_model_to_device(self, "cpu")
 

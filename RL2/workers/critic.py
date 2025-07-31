@@ -6,7 +6,6 @@ from RL2.utils.models import prepare_lora_model
 from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import load_model_to_device
-from RL2.utils.checkpointing import save_ckpt
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -104,6 +103,5 @@ class Critic(Worker):
             metrics["critic/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-        save_ckpt(self, step)
 
         load_model_to_device(self, "cpu")

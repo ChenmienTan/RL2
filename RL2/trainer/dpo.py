@@ -8,7 +8,7 @@ from RL2.dataset import DPODataset, get_dataloader
 from RL2.workers import Actor
 from RL2.algs import sequence_all_reduce
 from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.checkpointing import save_ckpt, save_model
+from RL2.utils.checkpointing import save_model
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -62,8 +62,10 @@ class DPOTrainer(Trainer):
 
     def train(self):
 
-        step = 0
-        for epoch in range(self.config.trainer.n_epochs):
+        step = self.load_ckpt(self.actor)
+        for epoch in range(
+            step // len(self.dataloader), self.config.trainer.n_epochs
+        ):
             for data_list in tqdm(
                 self.dataloader,
                 desc=f"Epoch {epoch + 1}",
@@ -72,7 +74,7 @@ class DPOTrainer(Trainer):
                 step += 1
                 data_list = self.ref_actor.compute_logps(data_list, step)
                 self.update_actor(data_list, step)
-                save_ckpt(self.actor, step)
+                self.save_ckpt(self.actor, step)
         save_model(self.actor)
 
 

@@ -7,34 +7,6 @@ from torch.distributed.checkpoint.state_dict import (
 )
 import transformers
 
-def find_latest_ckpt(save_dir):
-
-    dirs = glob.glob(f"{save_dir}/step*")
-    if len(dirs) == 0:
-        return None
-    return max(
-        dirs, key=lambda dir: int(dir.split("/step")[-1])
-    )
-
-def save_ckpt(worker, step):
-    # TODO: save step txt
-    if worker.config.save_freq is None or step % worker.config.save_freq != 0:
-        return
-    
-    path = f"{worker.config.save_dir}/step{step}"
-    if dist.get_rank() == 0:
-        os.makedirs(f"{path}/model", exist_ok=True)
-        os.makedirs(f"{path}/optimizer", exist_ok=True)
-
-    torch.save(
-        worker.model.state_dict(),
-        f"{path}/model/rank{dist.get_rank()}.pt"
-    )
-    torch.save(
-        worker.optimizer.state_dict(),
-        f"{path}/optimizer/rank{dist.get_rank()}.pt"
-    )
-
 def save_model(worker, rm=False):
     
     path = f"{worker.config.save_dir}/latest"
