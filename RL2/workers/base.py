@@ -15,7 +15,6 @@ from RL2.utils.sequences import (
     resume_order_of_data_list
 )
 from RL2.utils.offloading import load_model_to_device, load_optimizer_to_device
-from RL2.utils.checkpointing import find_latest_ckpt
 
 class Worker:
 

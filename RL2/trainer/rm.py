@@ -8,7 +8,6 @@ from RL2.dataset import RMDataset, get_dataloader
 from RL2.workers import Critic
 from RL2.algs import sequence_all_reduce
 from RL2.utils.comm import initialize_global_process_group
-from RL2.utils.checkpointing import save_model
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -69,7 +68,7 @@ class RMTrainer(Trainer):
                 step += 1
                 self.update_critic(data_list, step)
                 self.save_ckpt(self.critic, step)
-        save_model(self.critic, rm=True)
+        self.save_model(self.critic, rm=True)
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)
