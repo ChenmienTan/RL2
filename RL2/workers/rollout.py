@@ -7,6 +7,9 @@ from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions, get_model_state_dict
+)
 from sglang.srt.entrypoints.engine import Engine
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
@@ -225,9 +228,12 @@ class Rollout(Worker):
         # or llm.resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.llm.resume_memory_occupation()
-
-        named_tensors = [(k, v) for k, v in actor.model.state_dict().items()]
-        for idx, (name, tensor) in enumerate(named_tensors):
+        
+        options = StateDictOptions(full_state_dict=False, cpu_offload=False)
+        state_dict = get_model_state_dict(
+            actor.model, options=options
+        )
+        for idx, (name, tensor) in enumerate(state_dict.items()):
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
             )
@@ -245,7 +251,7 @@ class Rollout(Worker):
                     named_tensors=[(
                         name, LocalSerializedTensor(values=serialized_tensors)
                     )],
-                    flush_cache=(idx == len(named_tensors) - 1)
+                    flush_cache=(idx == len(state_dict) - 1)
                 )
         dist.barrier()
 
