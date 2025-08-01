@@ -84,7 +84,7 @@ class Trainer:
 
     def save_model(self, worker, rm=False):
 
-        dir = f"{self.config.trainer.save_dir}/latest"
+        save_dir = f"{self.config.trainer.save_dir}/latest"
         options = StateDictOptions(
             full_state_dict=True, cpu_offload=True
         )
@@ -93,7 +93,7 @@ class Trainer:
         )
         if dist.get_rank() == 0:
 
-            worker.tokenizer.save_pretrained(dir)
+            worker.tokenizer.save_pretrained(save_dir)
             # unwrap the model
             model_to_save = worker.model.module
             if rm:
@@ -106,7 +106,7 @@ class Trainer:
                 with torch.device("meta"):
                     model_to_save = model_cls._from_config(model_to_save.config)
             model_to_save.save_pretrained(
-                dir, state_dict=state_dict
+                save_dir, state_dict=state_dict
             )
 
         dist.barrier()
