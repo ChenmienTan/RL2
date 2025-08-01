@@ -5,9 +5,7 @@ import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
-    get_optimizer_state_dict,
-    set_model_state_dict,
-    set_optimizer_state_dict
+    set_model_state_dict
 )
 import transformers
 import wandb
@@ -51,9 +49,7 @@ class Trainer:
             "model": get_model_state_dict(
                 worker.model, options=options
             ),
-            "optimizer": get_optimizer_state_dict(
-                worker.model, worker.optimizer, options=options
-            )
+            "optimizer": worker.optimizer.state_dict()
         }
     
     def load_ckpt(self, worker):
@@ -72,9 +68,7 @@ class Trainer:
         set_model_state_dict(
             worker.model, ckpt["model"]
         )
-        set_optimizer_state_dict(
-            worker.model, worker.optimizer, ckpt["optimizer"]
-        )
+        worker.optimizer.load_state_dict(ckpt["optimizer"])
 
         return ckpt["step"]
     
