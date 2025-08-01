@@ -1,9 +1,13 @@
 from omegaconf import OmegaConf
-import os
 import torch
 import torch.distributed as dist
+import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import (
-    StateDictOptions, get_model_state_dict
+    StateDictOptions,
+    get_model_state_dict,
+    get_optimizer_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict
 )
 import transformers
 import wandb
@@ -37,66 +41,51 @@ class Trainer:
             num_training_steps=num_training_steps
         )
     
+    def get_ckpt(self, worker, step):
+
+        options = StateDictOptions(cpu_offload=True)
+        return {
+            "step": step,
+            "dataloader": self.dataloader.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "model": get_model_state_dict(
+                worker.model, options=options
+            ),
+            "optimizer": get_optimizer_state_dict(
+                worker.model, worker.optimizer, options=options
+            )
+        }
+    
     def load_ckpt(self, worker):
 
-        dir = self.config.trainer.load_ckpt_from_dir
-        if dir is None:
+        if self.config.trainer.load_ckpt_from_dir is None:
             return 0
 
-        self.dataloader.load_state_dict(
-            torch.load(
-                f"{dir}/dataloader.pt"
-            )
+        ckpt = self.get_ckpt(worker, 0)
+        dcp.load(
+            ckpt,
+            checkpoint_id=self.config.trainer.load_ckpt_from_dir
         )
-        worker.model.load_state_dict(
-            torch.load(
-                f"{dir}/model/rank{dist.get_rank()}.pt"
-            )
+        
+        self.dataloader.load_state_dict(ckpt["dataloader"])
+        self.scheduler.load_state_dict(ckpt["scheduler"])
+        set_model_state_dict(
+            worker.model, ckpt["model"]
         )
-        worker.optimizer.load_state_dict(
-            torch.load(
-                f"{dir}/optimizer/rank{dist.get_rank()}.pt"
-            )
-        )
-        self.scheduler.load_state_dict(
-            torch.load(
-                f"{dir}/scheduler.pt"
-            )
+        set_optimizer_state_dict(
+            worker.model, worker.optimizer, ckpt["optimizer"]
         )
 
-        with open(f"{dir}/step.txt") as f:
-            return int(f.read())
+        return ckpt["step"]
     
     def save_ckpt(self, worker, step):
 
         if self.config.trainer.save_freq is None or step % self.config.trainer.save_freq != 0:
             return
         
-        dir = f"{self.config.trainer.save_dir}/step{step}"
-        if dist.get_rank() == 0:
-
-            os.makedirs(f"{dir}/model", exist_ok=True)
-            os.makedirs(f"{dir}/optimizer", exist_ok=True)
-
-            with open(f"{dir}/step.txt", "w") as f:
-                f.write(str(step))
-
-            torch.save(
-                self.dataloader.state_dict(),
-                f"{dir}/dataloader.pt"
-            )
-            torch.save(
-                self.scheduler.state_dict(),
-                f"{dir}/scheduler.pt"
-            )
-
-        torch.save(
-            worker.model.state_dict(),
-            f"{dir}/model/rank{dist.get_rank()}.pt"
-        )
-        torch.save(
-            worker.optimizer.state_dict(),
-            f"{dir}/optimizer/rank{dist.get_rank()}.pt"
+        dcp.save(
+            self.get_ckpt(worker, step),
+            checkpoint_id=f"{self.config.trainer.save_dir}/step{step}"
         )
 
     def save_model(self, worker, rm=False):
