@@ -90,7 +90,6 @@ class Rollout(Worker):
             if self.config.apply_chat_template:
                 prompt = self.tokenizer.apply_chat_template(
                     messages,
-                    tool=getattr(self.env, "TOOL", None),
                     add_generation_prompt=True,
                     tokenize=False
                 )
@@ -140,7 +139,6 @@ class Rollout(Worker):
         ex = tokenize_messages(
             self.tokenizer,
             messages,
-            getattr(self.env, "TOOL", None),
             self.config.apply_chat_template
         )
         ex.update({

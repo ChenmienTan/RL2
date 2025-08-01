@@ -32,7 +32,6 @@ def get_dataloader(dataset, batch_size, shuffle):
 def tokenize_messages(
     tokenizer,
     messages,
-    tool=None,
     apply_chat_template=True
 ):
 
@@ -49,7 +48,6 @@ def tokenize_messages(
             if apply_chat_template:
                 next_states = tokenizer.apply_chat_template(
                     messages[:idx + 1],
-                    tool=tool,
                     add_generation_prompt=idx + 1 < len(messages) and messages[idx + 1]["role"] == "assistant"
                 )
                 assert next_states[:len(states)] == states, \
