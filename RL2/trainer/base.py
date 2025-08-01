@@ -7,7 +7,10 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict
 )
-import transformers
+from transformers import (
+    AutoModelForSequenceClassification,
+    get_cosine_schedule_with_warmup
+)
 import wandb
 
 class Trainer:
@@ -33,7 +36,7 @@ class Trainer:
         num_training_steps = self.config.trainer.n_epochs * len(self.dataloader)
         num_warmup_steps = int(worker.config.warmup_ratio * num_training_steps)
 
-        return transformers.get_cosine_schedule_with_warmup(
+        return get_cosine_schedule_with_warmup(
             worker.optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps
@@ -99,12 +102,10 @@ class Trainer:
             if rm:
                 # For RM, we load token classification model for simplicity 
                 # but save sequence classification model for compatibility.
-                model_cls_name = model_to_save.__class__.__name__.replace(
-                    "Token", "Sequence"
-                )
-                model_cls = getattr(transformers, model_cls_name)
                 with torch.device("meta"):
-                    model_to_save = model_cls._from_config(model_to_save.config)
+                    model_to_save = AutoModelForSequenceClassification.from_config(
+                        model_to_save.config
+                    )
             model_to_save.save_pretrained(
                 save_dir, state_dict=state_dict
             )
