@@ -25,7 +25,7 @@ class RMTrainer(Trainer):
             config.data.path, self.critic.tokenizer, config.data.max_length
         )
         self.dataloader = get_dataloader(
-            dataset, config.data.batch_size, True
+            dataset, config.data.batch_size
         )
         self.scheduler = self.prepare_scheduler(self.critic)
 

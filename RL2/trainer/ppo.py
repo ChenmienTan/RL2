@@ -19,8 +19,8 @@ class PPOTrainer(Trainer):
     def __init__(self, config):
         super().__init__(config)
 
-        self.train_dataloader = self.prepare_dataloader(True)
-        self.test_dataloader = self.prepare_dataloader(False)
+        self.train_dataloader = self.get_dataloader(True)
+        self.test_dataloader = self.get_dataloader(False)
 
         self.actor = Actor(config.actor, True)
         if config.actor.kl.coef > 0:
@@ -29,7 +29,7 @@ class PPOTrainer(Trainer):
             self.critic = Critic(config.critic)
         self.rollout = Rollout(config.rollout)
 
-    def prepare_dataloader(self, train: bool):
+    def get_dataloader(self, train: bool):
 
         dataset = RLDataset(
             self.config.data.train_data_path
@@ -40,8 +40,7 @@ class PPOTrainer(Trainer):
         return get_dataloader(
             dataset,
             self.config.data.prompts_per_rollout
-            if train else len(dataset),
-            train
+            if train else len(dataset)
         )
     
     @time_logger("compute_approx_kl")

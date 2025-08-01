@@ -24,7 +24,7 @@ class SFTTrainer(Trainer):
             config.data.path, self.actor.tokenizer, config.data.max_length
         )
         self.dataloader = get_dataloader(
-            dataset, config.data.batch_size, True
+            dataset, config.data.batch_size
         )
         self.scheduler = self.prepare_scheduler(self.actor)
 

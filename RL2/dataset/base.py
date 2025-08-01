@@ -20,11 +20,11 @@ def load_dataset(data_path):
     else:
         return datasets.load_dataset(data_path, split=split)
 
-def get_dataloader(dataset, batch_size, shuffle):
+def get_dataloader(dataset, batch_size):
     return StatefulDataLoader(
         dataset,
         batch_size,
-        shuffle=shuffle,
+        shuffle=True,
         drop_last=True,
         collate_fn=dataset.collate_fn
     )
