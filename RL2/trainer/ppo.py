@@ -23,10 +23,12 @@ class PPOTrainer(Trainer):
         self.test_dataloader = self.get_dataloader(False)
 
         self.actor = Actor(config.actor, True)
+        self.actor.scheduler = self.prepare_scheduler(self.actor)
         if config.actor.kl.coef > 0:
             self.ref_actor = Actor(config.ref_actor, False)
         if config.adv.estimator == "gae":
             self.critic = Critic(config.critic)
+            self.critic.scheduler = self.prepare_scheduler(self.critic)
         self.rollout = Rollout(config.rollout)
 
     def get_dataloader(self, train: bool):
@@ -80,16 +82,16 @@ class PPOTrainer(Trainer):
             raise NotImplementedError
             
     def train(self):
-
-        step = 0
-        for data_list in self.test_dataloader:
-            self.rollout(data_list, False, step)
-    
-        for epoch in range(self.config.trainer.n_epochs):
+        # TODO (PO): support checkpointing
+        step = self.load_ckpt(self.actor, self.critic)
+        for epoch in range(
+            step // len(self.train_dataloader), self.config.trainer.n_epochs
+        ):
             for data_list in tqdm(
                 self.train_dataloader,
                 desc=f"Epoch {epoch + 1}",
-                disable=(dist.get_rank() != 0)
+                disable=(dist.get_rank() != 0),
+                initial=step % len(self.train_dataloader)
             ):
                 step += 1
 
@@ -110,11 +112,14 @@ class PPOTrainer(Trainer):
                 self.actor.update(data_list, step)
                 if self.config.adv.estimator == "gae":
                     self.critic.update(data_list, step)
-                self.rollout.update(self.actor, step)
+                self.save_ckpt(self.actor, self.critic, step)
 
+                self.rollout.update(self.actor, step)
                 if step % self.config.trainer.test_freq == 0:
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
+
+        self.save_model(self.actor, self.critic)
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)

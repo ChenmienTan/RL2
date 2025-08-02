@@ -33,7 +33,9 @@ class Trainer:
     
     def prepare_scheduler(self, worker):
 
-        num_training_steps = self.config.trainer.n_epochs * len(self.train_dataloader)
+        num_training_steps = self.config.trainer.n_epochs * len(self.train_dataloader) * getattr(
+            worker.config, "update_per_rollout", 1
+        )
         num_warmup_steps = int(worker.config.warmup_ratio * num_training_steps)
 
         return get_cosine_schedule_with_warmup(

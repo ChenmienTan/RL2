@@ -21,6 +21,7 @@ actor:
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
+  warmup_ratio: 0.0
   freeze_steps: 0
   offload_model: true
   offload_optimizer: true
@@ -81,6 +82,7 @@ critic:
   lr: 5e-6
   weight_decay: ${actor.weight_decay}
   max_grad_norm: ${actor.max_grad_norm}
+  warmup_ratio: ${actor.warmup_ratio}
   offload_model: ${actor.offload_model}
   offload_optimizer: ${actor.offload_optimizer}
   save_dir: ckpts/${trainer.experiment_name}/critic
