@@ -12,7 +12,6 @@ actor:
   ddp_size: 1
   tp_size: 1
   sp_size: 1
-  load_ckpt: true
   max_length_per_device: null
   max_inference_length_per_device: ${actor.max_length_per_device}
   temperature: ${rollout.train_sampling_params.temperature}
@@ -26,8 +25,6 @@ actor:
   offload_model: true
   offload_optimizer: true
   adv_estimator: ${adv.estimator}
-  save_dir: ckpts/${trainer.experiment_name}/actor
-  save_freq: null
 
   kl:
     coef: 0.0
@@ -74,7 +71,6 @@ critic:
   ddp_size: ${actor.ddp_size}
   tp_size: ${actor.tp_size}
   sp_size: ${actor.sp_size}
-  load_ckpt: ${actor.load_ckpt}
   max_length_per_device: ${actor.max_length_per_device}
   max_inference_length_per_device: ${critic.max_length_per_device}
   update_per_rollout: 12
@@ -85,8 +81,6 @@ critic:
   warmup_ratio: ${actor.warmup_ratio}
   offload_model: ${actor.offload_model}
   offload_optimizer: ${actor.offload_optimizer}
-  save_dir: ckpts/${trainer.experiment_name}/critic
-  save_freq: ${actor.save_freq}
 
   lora:
     rank: 0
@@ -103,7 +97,10 @@ adv:
 trainer:
   project: null
   experiment_name: null
+  load_ckpt_from_dir: null
   n_epochs: 1
   test_freq: null
+  save_dir: ckpt/${trainer.experiment_name}
+  save_freq: null
   disable_wandb: false
   

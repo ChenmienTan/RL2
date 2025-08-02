@@ -44,48 +44,60 @@ class Trainer:
             num_training_steps=num_training_steps
         )
     
-    def get_ckpt(self, worker, step):
+    def get_ckpt(self, workers, step):
+
+        ckpt = {
+            "step": step,
+            "dataloader": self.train_dataloader.state_dict()
+        }
 
         options = StateDictOptions(
             full_state_dict=False, cpu_offload=True
         )
-        return {
-            "step": step,
-            "dataloader": self.train_dataloader.state_dict(),
-            "model": get_model_state_dict(
-                worker.model, options=options
-            ),
-            "optimizer": worker.optimizer.state_dict(),
-            "scheduler": worker.scheduler.state_dict()
-        }
+        for idx, worker in enumerate(workers):
+
+            worker_ckpt = {
+                "model": get_model_state_dict(
+                    worker.model, options=options
+                ),
+                "optimizer": worker.optimizer.state_dict(),
+                "scheduler": worker.scheduler.state_dict()
+            }
+            ckpt.update({
+                f"worker{idx}": worker_ckpt
+            })
+
+        return ckpt
     
-    def load_ckpt(self, worker):
+    def load_ckpt(self, workers):
 
         if self.config.trainer.load_ckpt_from_dir is None:
             return 0
 
-        ckpt = self.get_ckpt(worker, 0)
+        ckpt = self.get_ckpt(workers, 0)
         dcp.load(
             ckpt,
             checkpoint_id=self.config.trainer.load_ckpt_from_dir
         )
         
         self.train_dataloader.load_state_dict(ckpt["dataloader"])
-        set_model_state_dict(
-            worker.model, ckpt["model"]
-        )
-        worker.optimizer.load_state_dict(ckpt["optimizer"])
-        worker.scheduler.load_state_dict(ckpt["scheduler"])
+        for idx, worker in enumerate(workers):
+            worker_ckpt = ckpt[f"worker{idx}"]
+            set_model_state_dict(
+                worker.model, worker_ckpt["model"]
+            )
+            worker.optimizer.load_state_dict(worker_ckpt["optimizer"])
+            worker.scheduler.load_state_dict(worker_ckpt["scheduler"])
 
         return ckpt["step"]
     
-    def save_ckpt(self, worker, step):
+    def save_ckpt(self, workers, step):
 
         if self.config.trainer.save_freq is None or step % self.config.trainer.save_freq != 0:
             return
-        
+
         dcp.save(
-            self.get_ckpt(worker, step),
+            self.get_ckpt(workers, step),
             checkpoint_id=f"{self.config.trainer.save_dir}/step{step}"
         )
 

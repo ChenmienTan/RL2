@@ -82,8 +82,12 @@ class PPOTrainer(Trainer):
             raise NotImplementedError
             
     def train(self):
-        # TODO (PO): support checkpointing
-        step = self.load_ckpt(self.actor, self.critic)
+
+        step = self.load_ckpt(
+            (self.actor, self.critic)
+            if self.config.adv.estimator == "gae"
+            else (self.actor)
+        )
         for epoch in range(
             step // len(self.train_dataloader), self.config.trainer.n_epochs
         ):
@@ -112,14 +116,19 @@ class PPOTrainer(Trainer):
                 self.actor.update(data_list, step)
                 if self.config.adv.estimator == "gae":
                     self.critic.update(data_list, step)
-                self.save_ckpt(self.actor, self.critic, step)
+                self.save_ckpt(
+                    (self.actor, self.critic)
+                    if self.config.adv.estimator == "gae"
+                    else (self.actor),
+                    step
+                )
 
                 self.rollout.update(self.actor, step)
                 if step % self.config.trainer.test_freq == 0:
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
 
-        self.save_model(self.actor, self.critic)
+        self.save_model(self.actor)
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
