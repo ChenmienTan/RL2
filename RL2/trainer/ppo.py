@@ -5,7 +5,7 @@ import wandb
 from RL2.trainer import Trainer
 from RL2.dataset import RLDataset, get_dataloader
 from RL2.workers import Actor, Rollout, Critic
-from RL2.algs import (
+from RL2.utils.algorithms import (
     compute_approx_kl,
     compute_gae,
     compute_reinforce_adv

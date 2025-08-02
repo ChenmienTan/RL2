@@ -4,12 +4,12 @@ from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
 from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
-from RL2.algs import (
+from RL2.utils.functions import (
     compute_logsumexp,
     gather_action_logits,
-    compute_entropy,
-    compute_approx_kl
+    compute_entropy
 )
+from RL2.utils.algorithms import compute_approx_kl
 from RL2.utils.offloading import load_model_to_device
 from RL2.utils.logging import (
     progress_bar,
