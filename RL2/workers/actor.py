@@ -103,8 +103,7 @@ class Actor(Worker):
         if step < self.config.freeze_steps:
             load_model_to_device(self, "cpu")
             return
-        if self.config.kl.coef == 0 and self.config.update_per_rollout == 1:
-            load_model_to_device(self, torch.cuda.current_device())
+        load_model_to_device(self, torch.cuda.current_device())
         batches = self.scatter_and_pack_data_list(data_list, True)
 
         self.model.train()

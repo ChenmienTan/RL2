@@ -221,9 +221,7 @@ class Rollout(Worker):
     @time_logger("update_rollout")
     def update(self, actor, step):
 
-        if self.config.adv_estimator == "gae":
-            load_model_to_device(actor, torch.cuda.current_device())
-
+        load_model_to_device(actor, torch.cuda.current_device())
         torch.cuda.empty_cache()
         # or llm.resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:

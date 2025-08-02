@@ -54,7 +54,6 @@ rollout:
   max_turns: 1
   env_path: null
   dynamic_filtering: true
-  adv_estimator: ${adv.estimator}
 
 ref_actor:
   model_name: ${actor.model_name}
