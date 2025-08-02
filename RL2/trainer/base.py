@@ -44,15 +44,17 @@ class Trainer:
     
     def get_ckpt(self, worker, step):
 
-        options = StateDictOptions(cpu_offload=True)
+        options = StateDictOptions(
+            full_state_dict=False, cpu_offload=True
+        )
         return {
             "step": step,
             "dataloader": self.dataloader.state_dict(),
-            "scheduler": self.scheduler.state_dict(),
             "model": get_model_state_dict(
                 worker.model, options=options
             ),
-            "optimizer": worker.optimizer.state_dict()
+            "optimizer": worker.optimizer.state_dict(),
+            "scheduler": worker.scheduler.state_dict()
         }
     
     def load_ckpt(self, worker):
@@ -67,11 +69,11 @@ class Trainer:
         )
         
         self.dataloader.load_state_dict(ckpt["dataloader"])
-        self.scheduler.load_state_dict(ckpt["scheduler"])
         set_model_state_dict(
             worker.model, ckpt["model"]
         )
         worker.optimizer.load_state_dict(ckpt["optimizer"])
+        worker.scheduler.load_state_dict(ckpt["scheduler"])
 
         return ckpt["step"]
     

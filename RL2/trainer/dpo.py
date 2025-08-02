@@ -28,7 +28,7 @@ class DPOTrainer(Trainer):
         self.dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
-        self.scheduler = self.prepare_scheduler(self.actor)
+        self.actor.scheduler = self.prepare_scheduler(self.actor)
 
     @time_logger("update_actor")
     def update_actor(self, data_list, step):
@@ -55,7 +55,6 @@ class DPOTrainer(Trainer):
             metrics["accuray"].extend((reward_margins > 0).tolist())
 
         grad_norm = self.actor.optimizer_step()
-        self.scheduler.step()
         metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, self.actor.device_mesh["dp"], step)
 

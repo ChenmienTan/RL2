@@ -27,7 +27,7 @@ class RMTrainer(Trainer):
         self.dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
-        self.scheduler = self.prepare_scheduler(self.critic)
+        self.critic.scheduler = self.prepare_scheduler(self.critic)
 
     @time_logger("update_critic")
     def update_critic(self, data_list, step):
@@ -50,7 +50,6 @@ class RMTrainer(Trainer):
             metrics["accuray"].extend((reward_margins > 0).tolist())
 
         grad_norm = self.critic.optimizer_step()
-        self.scheduler.step()
         metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, self.critic.device_mesh["dp"], step)
 

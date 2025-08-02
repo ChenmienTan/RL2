@@ -155,6 +155,7 @@ class Worker:
         )
         self.optimizer.step()
         self.optimizer.zero_grad()
+        self.scheduler.step()
         load_optimizer_to_device(self, "cpu")
 
         return grad_norm.item()

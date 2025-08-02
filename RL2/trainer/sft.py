@@ -26,7 +26,7 @@ class SFTTrainer(Trainer):
         self.dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
-        self.scheduler = self.prepare_scheduler(self.actor)
+        self.actor.scheduler = self.prepare_scheduler(self.actor)
 
     @time_logger("update_actor")
     def update_actor(self, data_list, step):
@@ -49,7 +49,6 @@ class SFTTrainer(Trainer):
             metrics["loss"].append(loss.item())
 
         grad_norm = self.actor.optimizer_step()
-        self.scheduler.step()
         metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, self.actor.device_mesh["dp"], step)
 
