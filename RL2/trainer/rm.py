@@ -55,7 +55,7 @@ class RMTrainer(Trainer):
 
     def train(self):
 
-        step = self.load_ckpt((self.critic))
+        step = self.load_ckpt((self.critic,))
         for epoch in range(
             step // len(self.train_dataloader), self.config.trainer.n_epochs
         ):
@@ -67,7 +67,7 @@ class RMTrainer(Trainer):
             ):
                 step += 1
                 self.update_critic(data_list, step)
-                self.save_ckpt((self.critic), step)
+                self.save_ckpt((self.critic,), step)
         self.save_model(self.critic, rm=True)
 
 

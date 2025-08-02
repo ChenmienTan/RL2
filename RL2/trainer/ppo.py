@@ -86,7 +86,7 @@ class PPOTrainer(Trainer):
         step = self.load_ckpt(
             (self.actor, self.critic)
             if self.config.adv.estimator == "gae"
-            else (self.actor)
+            else (self.actor,)
         )
         for epoch in range(
             step // len(self.train_dataloader), self.config.trainer.n_epochs
@@ -119,7 +119,7 @@ class PPOTrainer(Trainer):
                 self.save_ckpt(
                     (self.actor, self.critic)
                     if self.config.adv.estimator == "gae"
-                    else (self.actor),
+                    else (self.actor,),
                     step
                 )
 
