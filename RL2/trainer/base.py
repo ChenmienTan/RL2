@@ -33,7 +33,7 @@ class Trainer:
     
     def prepare_scheduler(self, worker):
 
-        num_training_steps = self.config.trainer.n_epochs * len(self.dataloader)
+        num_training_steps = self.config.trainer.n_epochs * len(self.train_dataloader)
         num_warmup_steps = int(worker.config.warmup_ratio * num_training_steps)
 
         return get_cosine_schedule_with_warmup(
@@ -49,7 +49,7 @@ class Trainer:
         )
         return {
             "step": step,
-            "dataloader": self.dataloader.state_dict(),
+            "dataloader": self.train_dataloader.state_dict(),
             "model": get_model_state_dict(
                 worker.model, options=options
             ),
@@ -68,7 +68,7 @@ class Trainer:
             checkpoint_id=self.config.trainer.load_ckpt_from_dir
         )
         
-        self.dataloader.load_state_dict(ckpt["dataloader"])
+        self.train_dataloader.load_state_dict(ckpt["dataloader"])
         set_model_state_dict(
             worker.model, ckpt["model"]
         )

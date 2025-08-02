@@ -23,7 +23,7 @@ class SFTTrainer(Trainer):
         dataset = SFTDataset(
             config.data.path, self.actor.tokenizer, config.data.max_length
         )
-        self.dataloader = get_dataloader(
+        self.train_dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
         self.actor.scheduler = self.prepare_scheduler(self.actor)
@@ -56,13 +56,13 @@ class SFTTrainer(Trainer):
 
         step = self.load_ckpt(self.actor)
         for epoch in range(
-            step // len(self.dataloader), self.config.trainer.n_epochs
+            step // len(self.train_dataloader), self.config.trainer.n_epochs
         ):
             for data_list in tqdm(
-                self.dataloader,
+                self.train_dataloader,
                 desc=f"Epoch {epoch + 1}",
                 disable=(dist.get_rank() != 0),
-                initial=step % len(self.dataloader)
+                initial=step % len(self.train_dataloader)
             ):
                 step += 1
                 self.update_actor(data_list, step)
