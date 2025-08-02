@@ -12,11 +12,7 @@ from torch.distributed.fsdp import (
     MixedPrecision,
     ShardingStrategy
 )
-from torch.distributed.fsdp.wrap import (
-    transformer_auto_wrap_policy,
-    lambda_auto_wrap_policy,
-    _or_policy
-)
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers import (
     LlamaForCausalLM,
     LlamaForTokenClassification,
@@ -25,25 +21,6 @@ from transformers import (
     Qwen3ForCausalLM,
     Qwen3ForTokenClassification
 )
-from peft import (
-    LoraConfig,
-    TaskType,
-    get_peft_model,
-    PeftModel
-)
-
-def prepare_lora_model(model, task_type: str, config):
-
-    model.enable_input_require_grads()
-    lora_config = LoraConfig(
-        task_type=getattr(TaskType, task_type),
-        r=config.rank,
-        lora_alpha=config.alpha,
-        target_modules=config.target_modules,
-        lora_dropout=config.dropout,
-        bias="none"
-    )
-    return get_peft_model(model, lora_config)
 
 def prepare_llama_tp_layer(layer, device_mesh):
 
@@ -150,25 +127,6 @@ def prepare_dp_model(model, device_mesh):
         transformer_auto_wrap_policy,
         transformer_layer_cls=transformer_layer_cls
     )
-
-    if isinstance(model, PeftModel):
-
-        lambda_policy = functools.partial(
-            lambda_auto_wrap_policy,
-            lambda_fn=lambda module: all([
-                len(list(module.named_children)) == 0,
-                getattr(module, "weight", None) is not None,
-                module.weight.requires_grad
-            ])
-        )
-        
-        auto_wrap_policy = functools.partial(
-            _or_policy,
-            policies=[
-                auto_wrap_policy,
-                lambda_policy
-            ]
-        )
 
     mixed_precision = MixedPrecision(
         param_dtype=torch.bfloat16,

@@ -2,7 +2,6 @@ from collections import defaultdict
 import torch
 from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
-from RL2.utils.models import prepare_lora_model
 from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.algs import (
@@ -38,13 +37,6 @@ class Actor(Worker):
             trust_remote_code=True,
             attn_implementation="flash_attention_2"
         )
-
-        if hasattr(self.config, "lora") and self.config.lora.rank > 0:
-            assert config.tp_size == 1, \
-                "LoRA is not compatible with tensor parallelism."
-            self.model = prepare_lora_model(
-                self.model, "CAUSAL_LM", config.lora
-            )
 
         self.prepare_model_optimizer()
 

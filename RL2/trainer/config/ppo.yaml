@@ -82,12 +82,6 @@ critic:
   offload_model: ${actor.offload_model}
   offload_optimizer: ${actor.offload_optimizer}
 
-  lora:
-    rank: 0
-    alpha: 16
-    target_modules: all-linear
-    dropout: 0
-
 adv:
   estimator: reinforce # `reinforce` or `gae`
   gamma: 1.0

@@ -16,12 +16,6 @@ critic:
   max_grad_norm: 1.0
   warmup_ratio: 0.1
   offload_optimizer: true
-  
-  lora:
-    rank: 0
-    alpha: 16
-    target_modules: all-linear
-    dropout: 0
 
 trainer:
   project: null

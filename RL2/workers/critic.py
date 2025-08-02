@@ -2,7 +2,6 @@ from collections import defaultdict
 import torch
 from transformers import AutoModelForTokenClassification
 from RL2.workers import Worker
-from RL2.utils.models import prepare_lora_model
 from RL2.utils.sequences import count_total_actions
 from RL2.utils.ring_attn import update_params_of_ring_attn
 from RL2.utils.offloading import load_model_to_device
@@ -25,13 +24,6 @@ class Critic(Worker):
             trust_remote_code=True,
             attn_implementation="flash_attention_2"
         )
-
-        if hasattr(self.config, "lora") and self.config.lora.rank > 0:
-            assert config.tp_size == 1, \
-                "LoRA is not compatible with tensor parallelism."
-            self.model = prepare_lora_model(
-                self.model, "TOKEN_CLS", config.lora
-            )
 
         self.prepare_model_optimizer()
 

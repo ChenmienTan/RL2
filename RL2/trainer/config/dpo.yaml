@@ -19,12 +19,6 @@ actor:
   warmup_ratio: 0.1
   offload_optimizer: true
 
-  lora:
-    rank: 0
-    alpha: 16
-    target_modules: all-linear
-    dropout: 0
-
 ref_actor:
   model_name: ${actor.model_name}
   tokenizer_name: ${ref_actor.model_name}
