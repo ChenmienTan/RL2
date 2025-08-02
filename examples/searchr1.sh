@@ -30,7 +30,6 @@ torchrun \
     data.prompts_per_rollout=256 \
     data.responses_per_prompt=8 \
     actor.model_name=Qwen/Qwen2.5-3B-Instruct \
-    actor.use_liger_kernel=true \
     actor.max_length_per_device=8192 \
     rollout.max_turns=4 \
     rollout.train_sampling_params.max_new_tokens=512 \
