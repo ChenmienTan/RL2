@@ -1,5 +1,5 @@
 import copy
-from RL2.dataset.base import BaseDataset, load_dataset
+from RL2.datasets.base import BaseDataset, load_dataset
 
 class RLDataset(BaseDataset):
     

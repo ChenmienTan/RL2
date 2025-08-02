@@ -3,7 +3,7 @@ from collections import defaultdict
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
-from RL2.dataset import SFTDataset, get_dataloader
+from RL2.datasets import SFTDataset, get_dataloader
 from RL2.workers import Actor
 from RL2.utils.functions import sequence_all_reduce
 from RL2.utils.comm import initialize_global_process_group

@@ -17,7 +17,7 @@ from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
 from RL2.workers import Worker
-from RL2.dataset import tokenize_messages
+from RL2.datasets import tokenize_messages
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.offloading import load_model_to_device
 from RL2.utils.logging import time_logger, gather_and_log

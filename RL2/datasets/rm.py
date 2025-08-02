@@ -1,5 +1,5 @@
 import torch
-from RL2.dataset import BaseDataset
+from RL2.datasets import BaseDataset
 
 
 class RMDataset(BaseDataset):

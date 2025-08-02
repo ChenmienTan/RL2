@@ -1,4 +1,4 @@
-from RL2.dataset import RMDataset, tokenize_messages
+from RL2.datasets import RMDataset, tokenize_messages
 
 
 class DPODataset(RMDataset):
