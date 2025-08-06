@@ -21,7 +21,7 @@ from RL2.workers.rollout import Rollout
 from RL2.datasets import tokenize_messages
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
-from RL2.envs.gem_env import GEMEnvironmentManager, INVALID_ACTION, GEMTransition
+from envs.gem_env import GEMEnvironmentManager, INVALID_ACTION, GEMTransition
 
 
 class GEMRollout(Rollout):

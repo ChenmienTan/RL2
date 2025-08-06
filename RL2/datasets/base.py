@@ -25,7 +25,7 @@ def get_dataloader(dataset, batch_size):
         dataset,
         batch_size,
         shuffle=True,
-        drop_last=True,
+        drop_last=True if batch_size else False,
         collate_fn=dataset.collate_fn
     )
 
