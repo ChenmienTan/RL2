@@ -26,10 +26,9 @@ torchrun \
     rollout.use_gem_env=true \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
     rollout.tp_size=1 \
-    \
-    gem_env.env_id=${env} \
-    gem_env.wrappers="" \
-    gem_env.num_env=16 \
-    gem_env.async_env=true \
-    gem_env.prompt_template=qwen3_general \
-    gem_env.rollout_batch_size=${batch_size}
+    rollout.gem_env.env_id=${env} \
+    rollout.gem_env.wrappers="" \
+    rollout.gem_env.num_env=16 \
+    rollout.gem_env.async_env=true \
+    rollout.gem_env.prompt_template=qwen3_general \
+    rollout.gem_env.rollout_batch_size=${batch_size}

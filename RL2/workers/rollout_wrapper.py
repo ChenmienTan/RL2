@@ -29,7 +29,7 @@ def Rollout(config):
     the PPO trainer or other core RL2 components.
     
     Args:
-        config: Configuration object
+        config: Configuration object (config.rollout from PPOTrainer)
         
     Returns:
         Either StandardRollout or GEMRollout instance
@@ -44,6 +44,8 @@ def Rollout(config):
                 "git clone https://github.com/axonrl/gem.git && cd gem && pip install -e ."
             )
         logging.info("Using GEM rollout worker for environment interaction")
+        # For GEM, we need to pass a modified config that includes gem_env
+        # The gem_env config should be at the parent level in the hydra config
         return GEMRollout(config)
     else:
         # Standard RL2 rollout behavior

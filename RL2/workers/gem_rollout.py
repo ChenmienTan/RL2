@@ -38,9 +38,16 @@ class GEMRollout(Rollout):
         
         # Initialize GEM environment manager on the primary device
         if self.device_mesh["tp"].get_local_rank() == 0:
+            # Config is config.rollout, and gem_env should be nested under it
             self.gem_env_manager = GEMEnvironmentManager(config, self.tokenizer)
             self.num_envs = self.gem_env_manager.env.num_envs
             logging.info(f"Initialized GEM environment with {self.num_envs} parallel environments")
+    
+    def prepare_environment(self):
+        """Override to skip base class environment loading for GEM environments."""
+        # GEM environments are handled by GEMEnvironmentManager
+        # We don't need to load a Python module from env_path
+        pass
     
     async def generate_action_for_observation(
         self, 
