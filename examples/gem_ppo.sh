@@ -8,6 +8,12 @@ n_gpus=8
 batch_size=128
 env=rg:letter_counting
 
+# Set logging to DEBUG mode for detailed vectorized environment tracking
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export LOGLEVEL=DEBUG
+
 # Run PPO training with GEM environment
 torchrun \
     --nproc_per_node=$n_gpus \
@@ -19,6 +25,9 @@ torchrun \
     trainer.test_freq=9999999 \
     trainer.save_freq=9999999 \
     trainer.disable_wandb=false \
+    \
+    data.responses_per_prompt=1 \
+    data.prompts_per_rollout=1 \
     \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
     actor.lr=1e-6 \
