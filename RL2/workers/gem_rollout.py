@@ -365,6 +365,9 @@ class GEMRollout(Rollout):
                     {"role": "assistant", "content": transition.response}
                 ]
                 
+                # Debug logging for message content
+                logging.debug(f"Episode {len(data_list)}: Transition {i} - prompt length: {len(transition.prompt)}, response length: {len(transition.response)}, reward: {transition.reward}, done: {transition.done}")
+                
                 # Tokenize using RL2's tokenization function
                 # This creates states, actions, action_mask, and position_ids
                 ex = tokenize_messages(
@@ -386,14 +389,21 @@ class GEMRollout(Rollout):
                 
                 # Find last action token (where action_mask is 1)
                 last_action_idx = -1
+                action_token_count = ex["action_mask"].sum().item()
                 for j in reversed(range(num_tokens)):
                     if ex["action_mask"][j] == 1:
                         last_action_idx = j
                         break
                 
+                # Debug logging for reward assignment
+                logging.debug(f"Episode {len(data_list)}: num_tokens={num_tokens}, action_tokens={action_token_count}, last_action_idx={last_action_idx}, return={returns[i]:.4f}")
+                
                 if last_action_idx >= 0:
                     # Assign the discounted return to the last action token
                     dense_rewards[last_action_idx] = returns[i]
+                    logging.debug(f"Episode {len(data_list)}: Assigned reward {returns[i]:.4f} to token {last_action_idx}")
+                else:
+                    logging.warning(f"Episode {len(data_list)}: No action tokens found! action_mask: {ex['action_mask']}")
                 
                 # Add reward and EOS mask
                 ex["rewards"] = dense_rewards
