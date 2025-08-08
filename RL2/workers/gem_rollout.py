@@ -117,6 +117,13 @@ class GEMRollout(Rollout):
                 self.config.model_name
             )
             
+            # Debug logging for action content (only for first few actions)
+            if env_idx < 3:  # Only log first 3 environments  
+                logging.info(f"  DEBUG Action Gen Env {env_idx}:")
+                logging.info(f"    Raw response ({len(content)} chars): '{content[:200]}...'")
+                logging.info(f"    Extracted action: '{extracted_action}'")
+                logging.info(f"    Truncated: {response_is_truncated}")
+            
             # Use raw response as action (environment handles extraction internally)
             executable_action = INVALID_ACTION if response_is_truncated else content
             
@@ -217,6 +224,11 @@ class GEMRollout(Rollout):
             
             # Step ALL environments with their respective actions
             logging.debug(f"Step {step_count}: Stepping all environments with actions")
+            
+            # Debug: log actions being sent to environments (first few)
+            for i in range(min(3, len(actions))):
+                logging.info(f"  DEBUG Env {i} action: '{actions[i][:100]}...'")
+            
             next_obs, rewards, terminated, truncated, info = self.gem_env_manager.env.step(actions)
             done = terminated | truncated
             
@@ -226,6 +238,16 @@ class GEMRollout(Rollout):
             num_truncated = sum(truncated)
             logging.info(f"Step {step_count}: Environment step complete - {num_done} done ({num_terminated} terminated, {num_truncated} truncated)")
             logging.debug(f"Step {step_count}: Rewards: {rewards}")
+            
+            # Debug: Check why environments are terminating after 1 step
+            if step_count == 1:
+                logging.info(f"  DEBUG First step analysis:")
+                logging.info(f"    Total environments: {len(done)}")
+                logging.info(f"    Terminated immediately: {sum(terminated)}")
+                logging.info(f"    Truncated immediately: {sum(truncated)}")
+                for i in range(min(3, len(info))):
+                    if done[i]:
+                        logging.info(f"    Env {i} info: {info[i] if isinstance(info, list) else 'No info'}")
             
             # Track rewards per environment
             for i, reward in enumerate(rewards):
@@ -286,6 +308,14 @@ class GEMRollout(Rollout):
                         metrics["episode_success"].append(episode_success)
                         
                         logging.info(f"  Env {i}: Episode completed - length: {episode_length}, return: {episode_return:.3f}, success: {episode_success}")
+                        
+                        # Debug: print first few transitions of completed episode to understand structure
+                        if len(finished_episodes) < 3:  # Only log first few episodes
+                            logging.info(f"  DEBUG Episode {len(finished_episodes)} transitions:")
+                            for j, trans in enumerate(episodes[i][-3:] if len(episodes[i]) > 3 else episodes[i]):
+                                logging.info(f"    Step {j}: obs_len={len(trans.obs)}, action_len={len(trans.action)}, reward={trans.reward}, done={trans.done}")
+                                logging.debug(f"    Action: '{trans.action[:100]}...'")  # First 100 chars of action
+                        
                         episodes[i].clear()
                         episodes_reset_this_step += 1
             
@@ -402,6 +432,15 @@ class GEMRollout(Rollout):
                     # Assign the discounted return to the last action token
                     dense_rewards[last_action_idx] = returns[i]
                     logging.debug(f"Episode {len(data_list)}: Assigned reward {returns[i]:.4f} to token {last_action_idx}")
+                    
+                    # Additional debug: check if this is meaningful data
+                    if len(data_list) < 3:  # Only for first few examples
+                        logging.info(f"  DEBUG Training Example {len(data_list)}:")
+                        logging.info(f"    States shape: {ex['states'].shape}")
+                        logging.info(f"    Actions shape: {ex['actions'].shape}")
+                        logging.info(f"    Action tokens: {action_token_count} / {num_tokens}")
+                        logging.info(f"    Non-zero rewards: {(dense_rewards != 0).sum().item()}")
+                        logging.info(f"    Total reward: {dense_rewards.sum().item():.4f}")
                 else:
                     logging.warning(f"Episode {len(data_list)}: No action tokens found! action_mask: {ex['action_mask']}")
                 
@@ -418,6 +457,51 @@ class GEMRollout(Rollout):
                 # All fields must be tensors for the distributed training to work correctly
                 
                 data_list.append(ex)
+        
+        # For REINFORCE with single episodes, we need to work around the issue that 
+        # compute_reinforce_adv expects responses_per_prompt > 1 for meaningful advantages.
+        # Solution: Create artificial pairs by duplicating episodes with different rewards
+        # This allows REINFORCE to compute advantages by comparing "good" vs "bad" episodes
+        
+        if len(data_list) > 0:
+            logging.info("Preparing data for REINFORCE with single episodes")
+            original_count = len(data_list)
+            
+            # Create pairs by duplicating each episode and giving one a baseline reward
+            paired_data = []
+            episode_returns = [ex["rewards"].sum().item() for ex in data_list]
+            baseline_reward = sum(episode_returns) / len(episode_returns) if episode_returns else 0.0
+            
+            logging.info(f"Creating REINFORCE pairs with baseline: {baseline_reward:.4f}")
+            
+            for i, ex in enumerate(data_list):
+                original_reward = ex["rewards"].sum().item()
+                
+                # Original episode (keep as is)
+                paired_data.append(ex)
+                
+                # Create a "baseline" version with average reward
+                baseline_ex = {k: v.clone() if hasattr(v, 'clone') else v for k, v in ex.items()}
+                
+                # Set baseline reward (only at the last action token position)
+                baseline_rewards = torch.zeros_like(baseline_ex["rewards"])
+                action_indices = torch.where(baseline_ex["action_mask"])[0]
+                if len(action_indices) > 0:
+                    last_action_idx = action_indices[-1]
+                    baseline_rewards[last_action_idx] = baseline_reward
+                baseline_ex["rewards"] = baseline_rewards
+                
+                paired_data.append(baseline_ex)
+                
+                # Debug logging for reward setup
+                if i < 3:  # Only for first few pairs
+                    logging.info(f"  DEBUG Pair {i}:")
+                    logging.info(f"    Original reward: {original_reward:.4f} (at token {torch.where(ex['action_mask'])[0][-1] if len(torch.where(ex['action_mask'])[0]) > 0 else 'none'})")
+                    logging.info(f"    Baseline reward: {baseline_reward:.4f} (at token {last_action_idx if len(action_indices) > 0 else 'none'})")
+                    logging.info(f"    Expected advantage: {original_reward - baseline_reward:.4f}")
+            
+            data_list = paired_data
+            logging.info(f"Created {len(data_list)} paired examples from {original_count} episodes")
         
         # Subsample if we have too many trajectories
         rollout_batch_size = self.config.gem_env.get("rollout_batch_size", len(data_list))
