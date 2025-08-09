@@ -83,7 +83,7 @@ def compute_ppo_loss(worker, logps, minibatch, total_actions):
         logps - minibatch.get("old_logps", logps.detach())
     )
     clipped_ratio = torch.clamp(
-        ratio, worker.config.clip, 1 + worker.config.clip
+        ratio, 1 - worker.config.clip, 1 + worker.config.clip
     )
     objective = minibatch["advantages"] * ratio
     clipped_objective = minibatch["advantages"] * clipped_ratio
