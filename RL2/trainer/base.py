@@ -113,9 +113,13 @@ class Trainer:
         options = StateDictOptions(
             full_state_dict=True, cpu_offload=True
         )
+        # Ensure parameters are on the compute device before collecting state dict
+        load_model_to_device(worker, torch.cuda.current_device())
         state_dict = get_model_state_dict(
             worker.model, options=options
         )
+        # Move tensors back to CPU if offloading is enabled
+        load_model_to_device(worker, "cpu")
         if dist.get_rank() == 0:
 
             worker.tokenizer.save_pretrained(save_dir)
