@@ -8,7 +8,6 @@ proper support for vectorized environments and parallel async generation.
 
 import asyncio
 import json
-import logging
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any
 from copy import deepcopy
@@ -38,10 +37,8 @@ class GEMRollout(Rollout):
         
         # Initialize GEM environment manager on the primary device
         if self.device_mesh["tp"].get_local_rank() == 0:
-            # Config is config.rollout, and gem_env should be nested under it
             self.gem_env_manager = GEMEnvironmentManager(config, self.tokenizer)
             self.num_envs = self.gem_env_manager.env.num_envs
-            logging.info(f"Initialized GEM environment with {self.num_envs} parallel environments")
     
     def prepare_environment(self):
         """Override to skip base class environment loading for GEM environments."""
@@ -79,7 +76,6 @@ class GEMRollout(Rollout):
         # Check if prompt exceeds max length
         max_model_len = self.config.gem_env.get("max_model_len", 12800)
         if len(prompt_ids) >= max_model_len:
-            logging.warning(f"Environment {env_idx}: Prompt exceeds max length ({len(prompt_ids)} >= {max_model_len})")
             return INVALID_ACTION, {
                 "formatted_observation": formatted_obs,
                 "prompt_ids": prompt_ids,
@@ -117,13 +113,6 @@ class GEMRollout(Rollout):
                 self.config.model_name
             )
             
-            # Debug logging for action content (only for first few actions)
-            if env_idx < 3:  # Only log first 3 environments  
-                logging.info(f"  DEBUG Action Gen Env {env_idx}:")
-                logging.info(f"    Raw response ({len(content)} chars): '{content[:200]}...'")
-                logging.info(f"    Extracted action: '{extracted_action}'")
-                logging.info(f"    Truncated: {response_is_truncated}")
-            
             # Use raw response as action (environment handles extraction internally)
             executable_action = INVALID_ACTION if response_is_truncated else content
             
@@ -141,7 +130,6 @@ class GEMRollout(Rollout):
             }
             
         except Exception as e:
-            logging.error(f"Environment {env_idx}: Generation failed with error: {e}")
             return INVALID_ACTION, {
                 "formatted_observation": formatted_obs,
                 "prompt_ids": prompt_ids,
@@ -175,23 +163,16 @@ class GEMRollout(Rollout):
         num_generation_failed = 0
         step_count = 0
         
-        logging.info(f"Starting episode collection from {self.num_envs} environments")
-        logging.info(f"Initial observations: {len(obs)} environments ready")
-        
         while True:
             step_count += 1
-            logging.debug(f"=== Rollout Step {step_count} ===")
-            logging.debug(f"Active environments: {sum(1 for ep in episodes if ep)} ongoing, {self.num_envs - sum(1 for ep in episodes if ep)} starting/reset")
+            
             # Generate actions for ALL observations in parallel
             # This is the key for efficiency with vectorized environments
             generation_tasks = []
             for env_idx, observation in enumerate(obs):
                 task = self.generate_action_for_observation(observation, env_idx, train)
                 generation_tasks.append(task)
-                logging.debug(f"  Env {env_idx}: Created generation task (obs length: {len(str(observation))} chars)")
-            
-            logging.info(f"Step {step_count}: Starting parallel generation for {len(generation_tasks)} environments")
-            
+                
             # Run all generation tasks in parallel and wait for ALL to complete
             # This ensures we utilize the full parallelism of async generation
             results = await tqdm.gather(
@@ -200,11 +181,6 @@ class GEMRollout(Rollout):
                 leave=False,
                 disable=(dist.get_rank() != 0)
             )
-            
-            # Log generation results summary
-            successful_generations = sum(1 for action, extra in results if not extra["generation_failed"])
-            failed_generations = len(results) - successful_generations
-            logging.info(f"Step {step_count}: Generation complete - {successful_generations} successful, {failed_generations} failed")
             
             # Extract actions and extras from results
             actions = []
@@ -221,38 +197,9 @@ class GEMRollout(Rollout):
                     )
                 else:
                     num_generation_failed += 1
-            
-            # Step ALL environments with their respective actions
-            logging.debug(f"Step {step_count}: Stepping all environments with actions")
-            
-            # Debug: log actions being sent to environments (first few)
-            for i in range(min(3, len(actions))):
-                logging.info(f"  DEBUG Env {i} action: '{actions[i][:100]}...'")
-            
+                        
             next_obs, rewards, terminated, truncated, info = self.gem_env_manager.env.step(actions)
             done = terminated | truncated
-            
-            # Log environment step results
-            num_done = sum(done)
-            num_terminated = sum(terminated)
-            num_truncated = sum(truncated)
-            logging.info(f"Step {step_count}: Environment step complete - {num_done} done ({num_terminated} terminated, {num_truncated} truncated)")
-            logging.debug(f"Step {step_count}: Rewards: {rewards}")
-            
-            # Debug: Check why environments are terminating after 1 step
-            if step_count == 1:
-                logging.info(f"  DEBUG First step analysis:")
-                logging.info(f"    Total environments: {len(done)}")
-                logging.info(f"    Terminated immediately: {sum(terminated)}")
-                logging.info(f"    Truncated immediately: {sum(truncated)}")
-                for i in range(min(3, len(info))):
-                    if done[i]:
-                        logging.info(f"    Env {i} info: {info[i] if isinstance(info, list) else 'No info'}")
-            
-            # Track rewards per environment
-            for i, reward in enumerate(rewards):
-                if reward != 0:
-                    logging.debug(f"  Env {i}: Non-zero reward {reward}")
             
             # Process transitions for each environment
             episodes_completed_this_step = 0
@@ -261,21 +208,19 @@ class GEMRollout(Rollout):
             for i in range(self.num_envs):
                 if extras[i]["generation_failed"]:
                     # Handle generation failure
-                    logging.debug(f"  Env {i}: Generation failed, handling episode")
+                    
                     if self.config.gem_env.get("keep_generation_failed", False) and episodes[i]:
                         # Add reward to last transition and mark episode as done
                         episodes[i][-1].reward += rewards[i]
                         episodes[i][-1].done = True
                         finished_episodes.append(deepcopy(episodes[i]))
                         episodes_completed_this_step += 1
-                        logging.debug(f"  Env {i}: Kept failed episode with {len(episodes[i])} steps")
                     episodes[i].clear()
                     episodes_reset_this_step += 1
                     
                     # Reset this environment if not done
                     if not done[i]:
                         next_obs[i] = self.gem_env_manager.env.envs[i].reset()[0]
-                        logging.debug(f"  Env {i}: Reset after generation failure")
                 else:
                     # Create transition for successful generation
                     transition = GEMTransition(
@@ -291,41 +236,18 @@ class GEMRollout(Rollout):
                         action_is_formatted=extras[i]["action_is_formatted"],
                     )
                     episodes[i].append(transition)
-                    logging.debug(f"  Env {i}: Added transition (episode length: {len(episodes[i])}, reward: {rewards[i]}, done: {done[i]})")
                     
                     if done[i]:
                         # Episode finished - collect it
                         finished_episodes.append(deepcopy(episodes[i]))
                         episodes_completed_this_step += 1
                         
-                        # Collect episode metrics
-                        episode_return = sum(t.reward for t in episodes[i])
-                        episode_length = len(episodes[i])
-                        episode_success = episodes[i][-1].reward == 1.0  # Assuming success reward is 1
-                        
-                        metrics["episode_return"].append(episode_return)
-                        metrics["episode_length"].append(episode_length)
-                        metrics["episode_success"].append(episode_success)
-                        
-                        logging.info(f"  Env {i}: Episode completed - length: {episode_length}, return: {episode_return:.3f}, success: {episode_success}")
-                        
-                        # Debug: print first few transitions of completed episode to understand structure
-                        if len(finished_episodes) < 3:  # Only log first few episodes
-                            logging.info(f"  DEBUG Episode {len(finished_episodes)} transitions:")
-                            for j, trans in enumerate(episodes[i][-3:] if len(episodes[i]) > 3 else episodes[i]):
-                                logging.info(f"    Step {j}: obs_len={len(trans.obs)}, action_len={len(trans.action)}, reward={trans.reward}, done={trans.done}")
-                                logging.debug(f"    Action: '{trans.action[:100]}...'")  # First 100 chars of action
+                        metrics["episode_return"].append(sum(t.reward for t in episodes[i]))
+                        metrics["episode_length"].append(len(episodes[i]))
+                        metrics["episode_success"].append(episodes[i][-1].reward == 1.0)
                         
                         episodes[i].clear()
                         episodes_reset_this_step += 1
-            
-            # Log step summary
-            if episodes_completed_this_step > 0:
-                logging.info(f"Step {step_count}: Completed {episodes_completed_this_step} episodes, reset {episodes_reset_this_step} environments")
-            
-            # Log collection progress
-            total_transitions = sum(len(ep) for ep in finished_episodes)
-            logging.debug(f"Step {step_count}: Collection progress - {len(finished_episodes)} episodes, {total_transitions} transitions (target: {min_steps})")
             
             # Update observations for next step
             obs = next_obs
@@ -333,8 +255,6 @@ class GEMRollout(Rollout):
             # Check if we've collected enough transitions
             total_transitions = sum(len(ep) for ep in finished_episodes)
             if total_transitions >= min_steps:
-                logging.info(f"Collection target reached: {len(finished_episodes)} episodes with {total_transitions} transitions (target: {min_steps})")
-                logging.info(f"Total rollout steps: {step_count}")
                 break
         
         # Compute collection statistics
@@ -395,9 +315,6 @@ class GEMRollout(Rollout):
                     {"role": "assistant", "content": transition.response}
                 ]
                 
-                # Debug logging for message content
-                logging.debug(f"Episode {len(data_list)}: Transition {i} - prompt length: {len(transition.prompt)}, response length: {len(transition.response)}, reward: {transition.reward}, done: {transition.done}")
-                
                 # Tokenize using RL2's tokenization function
                 # This creates states, actions, action_mask, and position_ids
                 ex = tokenize_messages(
@@ -424,25 +341,13 @@ class GEMRollout(Rollout):
                     if ex["action_mask"][j] == 1:
                         last_action_idx = j
                         break
-                
-                # Debug logging for reward assignment
-                logging.debug(f"Episode {len(data_list)}: num_tokens={num_tokens}, action_tokens={action_token_count}, last_action_idx={last_action_idx}, return={returns[i]:.4f}")
+                        
                 
                 if last_action_idx >= 0:
                     # Assign the discounted return to the last action token
                     dense_rewards[last_action_idx] = returns[i]
-                    logging.debug(f"Episode {len(data_list)}: Assigned reward {returns[i]:.4f} to token {last_action_idx}")
-                    
-                    # Additional debug: check if this is meaningful data
-                    if len(data_list) < 3:  # Only for first few examples
-                        logging.info(f"  DEBUG Training Example {len(data_list)}:")
-                        logging.info(f"    States shape: {ex['states'].shape}")
-                        logging.info(f"    Actions shape: {ex['actions'].shape}")
-                        logging.info(f"    Action tokens: {action_token_count} / {num_tokens}")
-                        logging.info(f"    Non-zero rewards: {(dense_rewards != 0).sum().item()}")
-                        logging.info(f"    Total reward: {dense_rewards.sum().item():.4f}")
                 else:
-                    logging.warning(f"Episode {len(data_list)}: No action tokens found! action_mask: {ex['action_mask']}")
+                    pass
                 
                 # Add reward and EOS mask
                 ex["rewards"] = dense_rewards
@@ -458,67 +363,15 @@ class GEMRollout(Rollout):
                 
                 data_list.append(ex)
         
-        # For REINFORCE with single episodes, we need to work around the issue that 
-        # compute_reinforce_adv expects responses_per_prompt > 1 for meaningful advantages.
-        # Solution: Create artificial pairs by duplicating episodes with different rewards
-        # This allows REINFORCE to compute advantages by comparing "good" vs "bad" episodes
-        
-        if len(data_list) > 0:
-            logging.info("Preparing data for REINFORCE with single episodes")
-            original_count = len(data_list)
-            
-            # Create pairs by duplicating each episode and giving one a baseline reward
-            paired_data = []
-            episode_returns = [ex["rewards"].sum().item() for ex in data_list]
-            baseline_reward = sum(episode_returns) / len(episode_returns) if episode_returns else 0.0
-            
-            logging.info(f"Creating REINFORCE pairs with baseline: {baseline_reward:.4f}")
-            
-            for i, ex in enumerate(data_list):
-                original_reward = ex["rewards"].sum().item()
-                
-                # Original episode (keep as is)
-                paired_data.append(ex)
-                
-                # Create a "baseline" version with average reward
-                baseline_ex = {k: v.clone() if hasattr(v, 'clone') else v for k, v in ex.items()}
-                
-                # Set baseline reward (only at the last action token position)
-                baseline_rewards = torch.zeros_like(baseline_ex["rewards"])
-                action_indices = torch.where(baseline_ex["action_mask"])[0]
-                if len(action_indices) > 0:
-                    last_action_idx = action_indices[-1]
-                    baseline_rewards[last_action_idx] = baseline_reward
-                baseline_ex["rewards"] = baseline_rewards
-                
-                paired_data.append(baseline_ex)
-                
-                # Debug logging for reward setup
-                if i < 3:  # Only for first few pairs
-                    logging.info(f"  DEBUG Pair {i}:")
-                    logging.info(f"    Original reward: {original_reward:.4f} (at token {torch.where(ex['action_mask'])[0][-1] if len(torch.where(ex['action_mask'])[0]) > 0 else 'none'})")
-                    logging.info(f"    Baseline reward: {baseline_reward:.4f} (at token {last_action_idx if len(action_indices) > 0 else 'none'})")
-                    logging.info(f"    Expected advantage: {original_reward - baseline_reward:.4f}")
-            
-            data_list = paired_data
-            logging.info(f"Created {len(data_list)} paired examples from {original_count} episodes")
-        
-        # Subsample if we have too many trajectories
+        # Subsample if we have too many trajectories.
         rollout_batch_size = self.config.gem_env.get("rollout_batch_size", len(data_list))
         if len(data_list) > rollout_batch_size:
             import random
             data_list = random.sample(data_list, rollout_batch_size)
-            logging.info(f"Subsampled {rollout_batch_size} from {len(data_list)} trajectories")
         
         # Validate data format
         if data_list:
             example = data_list[0]
-            logging.debug(f"Data validation - Example fields: {example.keys()}")
-            logging.debug(f"States shape: {example['states'].shape}")
-            logging.debug(f"Actions shape: {example['actions'].shape}")
-            logging.debug(f"Action mask shape: {example['action_mask'].shape}")
-            logging.debug(f"Rewards shape: {example['rewards'].shape}")
-            logging.debug(f"EOS mask shape: {example['eos_mask'].shape}")
         
         return data_list
     
@@ -541,13 +394,10 @@ class GEMRollout(Rollout):
         # The data is distributed across ranks
         if self.device_mesh["tp"].get_local_rank() == 0:
             # For GEM environments, we collect from environments instead of using data_list
-            logging.info(f"=== Starting GEM Rollout (Step {step}) ===")
-            logging.info(f"Mode: {'Training' if train else 'Evaluation'}")
-            logging.info(f"Vectorized environments: {self.num_envs}")
             
             # Determine how many transitions to collect
             rollout_batch_size = self.config.gem_env.get("rollout_batch_size", 128)
-            logging.info(f"Target transitions to collect: {rollout_batch_size}")
+            
             
             # Run async episode collection
             loop = asyncio.get_event_loop()
@@ -559,16 +409,6 @@ class GEMRollout(Rollout):
             if train:
                 self.llm.release_memory_occupation()
             
-            # Log collection metrics
-            logging.info(f"=== GEM Rollout Complete (Step {step}) ===")
-            logging.info(f"Episodes collected: {collection_info['num_episodes']}")
-            logging.info(f"Mean episode return: {collection_info['mean_episode_return']:.3f}")
-            logging.info(f"Mean episode length: {collection_info['mean_episode_length']:.1f}")
-            logging.info(f"Mean episode success rate: {collection_info['mean_episode_success']:.3f}")
-            logging.info(f"Mean response length: {collection_info['mean_response_length']:.1f} tokens")
-            logging.info(f"Length clip ratio: {collection_info['length_clip_ratio']:.3f}")
-            logging.info(f"Generation failures: {collection_info['num_generation_failed']}")
-            
             # Prepare metrics for logging
             suffix = "train" if train else "test"
             metrics = {f"{k}/{suffix}": [v] for k, v in collection_info.items()}
@@ -579,23 +419,10 @@ class GEMRollout(Rollout):
                 return None
             
             # Convert episodes to training data
-            logging.info("Converting episodes to training data format...")
             data_list = self.prepare_data_for_training(finished_episodes)
             
             # Gather data across distributed processes
             data_list = gather_and_concat_list(data_list, self.device_mesh["dp"])
-            
-            # Log training data preparation results
-            if dist.get_rank() == 0 and len(data_list) > 0:
-                logging.info(f"=== Training Data Prepared ===")
-                logging.info(f"Training examples: {len(data_list)}")
-                example = data_list[0]
-                logging.info(f"Example shapes - States: {example['states'].shape}, Actions: {example['actions'].shape}")
-                logging.info(f"Example reward sum: {example['rewards'].sum().item():.3f}")
-                logging.info(f"Example action mask sum: {example['action_mask'].sum().item()}")
-                logging.debug(f"Example fields: {list(example.keys())}")
-            else:
-                logging.info("No training data prepared (empty episodes or not rank 0)")
             
             return data_list if dist.get_rank() == 0 else None
             
