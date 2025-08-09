@@ -20,19 +20,23 @@ torchrun \
     -m RL2.trainer.ppo \
     \
     trainer.project=gem \
-    trainer.experiment_name=rl2-qwen3-1.7b-${env} \
-    trainer.n_epochs=200 \
+    trainer.experiment_name=rl2-qwen3-1.7b-${env}-ppo-epoch-2 \
+    trainer.n_epochs=500 \
     trainer.test_freq=9999999 \
     trainer.save_freq=9999999 \
     trainer.disable_wandb=false \
     \
-    data.responses_per_prompt=2 \
+    data.responses_per_prompt=1 \
     data.prompts_per_rollout=1 \
     \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
     actor.lr=1e-6 \
     actor.max_length_per_device=8192 \
     actor.sp_size=2 \
+    actor.update_per_rollout=2 \
+    \
+    adv.estimator=reinforce \
+    adv.norm_var=true \
     \
     rollout.use_gem_env=true \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
@@ -40,7 +44,8 @@ torchrun \
     rollout.train_sampling_params.max_new_tokens=8192  \
     rollout.gem_env.env_id=${env} \
     rollout.gem_env.wrappers="" \
-    rollout.gem_env.num_env=128 \
+    rollout.gem_env.num_env=16 \
+    rollout.gem_env.rollout_batch_size=128 \
     rollout.gem_env.async_env=true \
     rollout.gem_env.prompt_template=qwen3_general \
     rollout.gem_env.rollout_batch_size=${batch_size} \

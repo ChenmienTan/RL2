@@ -61,7 +61,20 @@ def compute_gae(data_list, gamma, lamda):
 def compute_reinforce_adv(
     data_list, responses_per_prompt, norm_var: bool
 ):
-    
+    # Fallback to return-only baseline if there is only one response per prompt.
+    if responses_per_prompt == 1:
+        returns = torch.FloatTensor([ex["rewards"].sum() for ex in data_list])
+
+        if norm_var and len(returns) > 0:
+            mean = returns.mean()
+            std = returns.std()
+            returns = (returns - mean) / (std + torch.finfo(returns.dtype).eps)
+
+        for ex, advantage in zip(data_list, returns):
+            ex["advantages"] = advantage * ex["action_mask"]
+        return
+
+    # Otherwise, use per-prompt mean baseline across multiple responses
     rewards = torch.FloatTensor(
         [ex["rewards"].sum() for ex in data_list]
     ).view(-1, responses_per_prompt)
@@ -70,7 +83,7 @@ def compute_reinforce_adv(
 
     if norm_var:
         stds = rewards.std(-1)
-        advantages /= (
+        advantages = advantages / (
             stds.unsqueeze(-1) + torch.finfo(advantages.dtype).eps
         )
 
