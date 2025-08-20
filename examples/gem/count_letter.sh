@@ -24,7 +24,6 @@ torchrun \
     trainer.n_epochs=500 \
     trainer.test_freq=9999999 \
     trainer.save_freq=9999999 \
-    trainer.disable_wandb=false \
     \
     data.responses_per_prompt=1 \
     data.prompts_per_rollout=1 \
@@ -37,6 +36,7 @@ torchrun \
     \
     adv.estimator=reinforce \
     adv.norm_var=true \
+    adv.global_norm=true \
     \
     rollout.use_gem_env=true \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
