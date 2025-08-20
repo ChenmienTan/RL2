@@ -73,6 +73,10 @@ class GEMRollout(Rollout):
         # Tokenize to check length
         prompt_ids = self.tokenizer(formatted_obs, add_special_tokens=False).input_ids
         
+        # Print prompts for debugging
+        print(f"[Env {env_idx}] Prompt:\n{formatted_obs}")
+        print(f"[Env {env_idx}] Prompt tokens: {len(prompt_ids)}")
+        
         # Check if prompt exceeds max length
         max_model_len = self.config.gem_env.get("max_model_len", 12800)
         if len(prompt_ids) >= max_model_len:
@@ -105,6 +109,10 @@ class GEMRollout(Rollout):
             
             response_ids = self.tokenizer.encode(content, add_special_tokens=False)
             response_is_truncated = meta_info["finish_reason"]["type"] == "length"
+            
+            # Print response for debugging
+            print(f"[Env {env_idx}] Response (last 200 chars): {content[-200:]}...")
+            print(f"[Env {env_idx}] Response tokens: {len(response_ids)}, truncated: {response_is_truncated}")
             
             # Extract structured action from response
             extracted_action = self.gem_env_manager.extract_action(
