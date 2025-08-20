@@ -64,7 +64,7 @@ def tokenize_messages(
     if shift:
         states = states[:-1]
         actions = actions[1:]
-        action_mask[1:]
+        action_mask = action_mask[1:]
     if max_length is not None:
         states = states[:max_length]
         actions = actions[:max_length]
