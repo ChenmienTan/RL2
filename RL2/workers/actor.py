@@ -1,21 +1,18 @@
 from collections import defaultdict
 import torch
-from torch.distributed.checkpoint.state_dict import (
-    StateDictOptions, get_model_state_dict
-)
 from transformers import AutoModelForCausalLM
 from RL2.workers import Worker
-from RL2.utils.sequences import count_total
-from RL2.utils.ring_attn import update_params_of_ring_attn
+from RL2.utils.sequences import data_manager, count_total
+from RL2.utils.ring_attn import ring_attn_manager
 from RL2.utils.functions import (
     compute_logsumexp,
     gather_action_logits,
-    compute_entropy
+    compute_entropy,
+    aggregate_values
 )
-from RL2.utils.algorithms import (
-    compute_approx_kl, compute_surrogate_loss
-)
-from RL2.utils.offloading import load_model_to_device
+from RL2.utils.algorithms import compute_approx_kl
+from RL2.utils.offloading import model_offloading_manager
+from RL2.utils.checkpointing import get_state_dict
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -45,10 +42,8 @@ class Actor(Worker):
 
         self.prepare_model_optimizer()
 
+    @ring_attn_manager
     def forward(self, minibatch, return_entropy=False):
-        update_params_of_ring_attn(
-            minibatch["cu_seqlens"], self.device_mesh["sp"]
-        )
 
         logits = self.model(
             input_ids=minibatch["states"],
@@ -77,11 +72,10 @@ class Actor(Worker):
             return logps
 
     @time_logger("compute_logps")
+    @model_offloading_manager
     @torch.no_grad()
-    def compute_logps(self, data_list, step):
-        load_model_to_device(self, torch.cuda.current_device())
-        minibatches = self.scatter_and_pack_data_list(data_list)
-
+    @data_manager(gather=True)
+    def compute_logps(self, minibatches, step):
         prefix = "old" if self.train else "ref"
 
         self.model.eval()
@@ -90,18 +84,16 @@ class Actor(Worker):
         ):
             minibatch[f"{prefix}_logps"] = self.forward(minibatch)
         
-        if not self.train:
-            load_model_to_device(self, "cpu")
-        return self.unpack_and_gather_data_list(minibatches) 
+        return minibatches
     
     @time_logger("update_actor")
-    def update(self, data_list, step: int):
-        
+    @model_offloading_manager
+    @data_manager(pack_minibatches=True)
+    def update(self, batches, step: int):
         if step < self.config.freeze_steps:
-            load_model_to_device(self, "cpu")
-            return
-        load_model_to_device(self, torch.cuda.current_device())
-        batches = self.scatter_and_pack_data_list(data_list, True)
+            return get_state_dict(
+                self.model, full_state_dict=False
+            )
 
         self.model.train()
         tbar = progress_bar(
@@ -111,18 +103,37 @@ class Actor(Worker):
         metrics = defaultdict(list)
         for batch in batches:
             
-            total_actions = count_total(batch, "action_mask", self.device_mesh)
-            total_sequences = count_total(batch, "eos_mask", self.device_mesh)
+            total_actions, total_sequences = count_total(
+                batch,
+                ("action_mask", "eos_mask"),
+                self.device_mesh["dp"]
+            )
             metric = defaultdict(list)
             for minibatch in batch:
 
-                logps, entropy = self.forward(minibatch, return_entropy=True)
-                surrogate_loss, clip_ratio = compute_surrogate_loss(
-                    self, logps, minibatch, total_actions, total_sequences
+                logps, entropy = self.forward(
+                    minibatch, return_entropy=True
                 )
-                entropy_loss = - entropy.sum() / total_actions
-                loss = surrogate_loss + self.config.entropy.coef * entropy_loss
+                ratio = torch.exp(
+                    logps - minibatch.get("old_logps", logps.detach())
+                )
+                clipped_ratio = torch.clamp(
+                    ratio, 1 - self.config.clip, 1 + self.config.clip
+                )
+                objective = minibatch["advantages"] * ratio
+                clipped_objective = minibatch["advantages"] * clipped_ratio
+                losses = - torch.min(objective, clipped_objective)
+                clip_ratios = objective > clipped_objective
 
+                loss, clip_ratio, entropy = aggregate_values(
+                    (losses, clip_ratios, entropy),
+                    minibatch,
+                    self.config.agg_mode,
+                    total_actions,
+                    total_sequences
+                )
+
+                loss = loss - self.config.entropy.coef * entropy
                 if self.config.kl.coef > 0 and self.config.kl.type == "loss":
                     kl_loss = compute_approx_kl(
                         logps,
@@ -134,7 +145,7 @@ class Actor(Worker):
                 self.backward(loss)
 
                 tbar.update()
-                metric["actor/entropy_loss"].append(entropy_loss.item())
+                metric["actor/entropy"].append(entropy.item())
                 metric["actor/loss"].append(loss.item())
                 metric["actor/clip_ratio"].append(clip_ratio.item())
 
@@ -142,15 +153,12 @@ class Actor(Worker):
 
             for k, v in metric.items():
                 metrics[k].append(
-                    gather_and_reduce(v, self.device_mesh)
+                    gather_and_reduce(v, self.device_mesh["dp"])
                 )
             metrics["actor/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
 
-        options = StateDictOptions(full_state_dict=False, cpu_offload=True)
-        state_dict = get_model_state_dict(
-            self.model, options=options
+        return get_state_dict(
+            self.model, full_state_dict=False
         )
-        load_model_to_device(self, "cpu")
-        return state_dict

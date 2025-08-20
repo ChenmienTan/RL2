@@ -1,19 +1,8 @@
-import math
 import torch
 from torch.nn.utils import clip_grad_norm_
 import torch.distributed as dist
 import transformers
-from RL2.utils.models import prepare_tp_model, prepare_dp_model
-from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
-from RL2.utils.sequences import (
-    group_data_list_into_all_rank_data_lists,
-    scatter_data_lists_along_sp_dim,
-    scatter_data_lists_along_tp_dim,
-    pack_data_lists_into_minibatches,
-    split_minibatches_into_data_list,
-    gather_data_list_along_sp_dim,
-    resume_order_of_data_list
-)
+from RL2.utils.parallelism import prepare_tp_model, prepare_dp_model
 from RL2.utils.offloading import load_model_to_device, load_optimizer_to_device
 
 class Worker:
@@ -69,75 +58,6 @@ class Worker:
             )
 
         load_model_to_device(self, "cpu")
-
-    def scatter_and_pack_data_list(
-        self, data_list, pack_minibatches=False, pair=False
-    ):
-
-        if pack_minibatches:
-            # Pack minibatches into multiple batches, where each batch is 
-            # used for an update and contains multiple minibatches.
-            if dist.get_rank() == 0:
-                assert len(data_list) >= self.config.update_per_rollout, \
-                    f"The number of trajectories {len(data_list)} is less than the number of updates {self.config.update_per_rollout}."
-                bsz = math.ceil(
-                    len(data_list) / self.config.update_per_rollout
-                )
-                return [
-                    self.scatter_and_pack_data_list(
-                        data_list[update * bsz:(update + 1) * bsz]
-                    )
-                    for update in range(self.config.update_per_rollout)
-                ]
-            else:
-                return [
-                    self.scatter_and_pack_data_list(None)
-                    for _ in range(self.config.update_per_rollout)
-                ]
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            if self.device_mesh["sp"].get_local_rank() == 0:
-                if self.device_mesh["dp"].get_local_rank() == 0:
-                    all_rank_data_lists = group_data_list_into_all_rank_data_lists(
-                        self, data_list, pair
-                    )
-                data_lists = split_and_scatter_list(
-                    all_rank_data_lists
-                    if self.device_mesh["dp"].get_local_rank() == 0
-                    else None,
-                    self.device_mesh["dp"]
-                )[0]
-            data_lists = scatter_data_lists_along_sp_dim(
-                data_lists
-                if self.device_mesh["sp"].get_local_rank() == 0
-                else None,
-                self.device_mesh["sp"]
-            )
-        data_lists = scatter_data_lists_along_tp_dim(
-            data_lists
-            if self.device_mesh["tp"].get_local_rank() == 0
-            else None,
-            self.device_mesh["tp"]
-        )
-        return pack_data_lists_into_minibatches(
-            data_lists,
-            self.device_mesh["tp"].size()
-        )
-
-    def unpack_and_gather_data_list(self, minibatches):
-        
-        if self.device_mesh["tp"].get_local_rank() != 0:
-            return
-        data_list = split_minibatches_into_data_list(minibatches)
-        data_list = gather_data_list_along_sp_dim(
-            data_list, self.device_mesh["sp"]
-        )
-        if self.device_mesh["sp"].get_local_rank() == 0:
-            data_list = gather_and_concat_list(
-                data_list, self.device_mesh["dp"]
-            )
-            if self.device_mesh["dp"].get_local_rank() == 0:
-                return resume_order_of_data_list(data_list)
             
     def backward(self, loss):
         # https://github.com/ChenmienTan/RL2/issues/11

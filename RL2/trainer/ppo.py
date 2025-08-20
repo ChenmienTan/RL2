@@ -12,6 +12,7 @@ from RL2.utils.algorithms import (
     compute_reinforce_adv
 )
 from RL2.utils.comm import initialize_global_process_group
+from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
 from RL2.utils.logging import time_logger
 
 
@@ -37,7 +38,8 @@ class PPOTrainer(Trainer):
         dataset = RLDataset(
             self.config.data.train_data_path
             if train else self.config.data.test_data_path,
-            self.config.data.responses_per_prompt if train else 1
+            self.config.data.responses_per_prompt
+            if train else 1
         )
 
         return get_dataloader(
@@ -47,36 +49,37 @@ class PPOTrainer(Trainer):
         )
     
     @time_logger("compute_approx_kl")
-    def compute_approx_kl(self, data_list, step):
+    def compute_approx_kl(self, tensor_dicts, step):
         
         kl = 0
         total_actions = sum([
-            ex["action_mask"].sum().item() for ex in data_list
+            td["action_mask"].sum().item() for td in tensor_dicts
         ])
-        for ex in data_list:
+        for td in tensor_dicts:
             approx_kl = compute_approx_kl(
-                ex["old_logps"],
-                ex["ref_logps"],
+                td["old_logps"],
+                td["ref_logps"],
                 self.config.actor.kl.reward_estimator
             )
             if self.config.actor.kl.type == "reward":
-                ex["rewards"] -= self.config.actor.kl.coef * approx_kl
+                td["rewards"] -= self.config.actor.kl.coef * approx_kl
             kl += approx_kl.sum().item() / total_actions
         wandb.log({"actor/kl": kl}, step=step)
     
     @time_logger("compute_advantages")
-    def compute_advantages(self, data_list, step):
+    def compute_advantages(self, tensor_dicts, step):
 
         if self.config.adv.estimator == "gae":
             compute_gae(
-                data_list,
+                tensor_dicts,
                 self.config.adv.gamma,
                 self.config.adv.lamda
             )
         elif self.config.adv.estimator == "reinforce":
             compute_reinforce_adv(
-                data_list,
+                tensor_dicts,
                 self.config.data.responses_per_prompt,
+                self.config.adv.global_norm,
                 self.config.adv.norm_var
             )
         else: 
@@ -84,7 +87,8 @@ class PPOTrainer(Trainer):
             
     def train(self):
 
-        step = self.load_ckpt(
+        step = load_ckpt(
+            self,
             (self.actor, self.critic)
             if self.config.adv.estimator == "gae"
             else (self.actor,)
@@ -100,24 +104,25 @@ class PPOTrainer(Trainer):
             ):
                 step += 1
 
-                data_list = self.rollout(data_list, True, step)
+                tensor_dicts = self.rollout(data_list, True, step)
 
                 if self.config.actor.kl.coef > 0:
-                    data_list = self.ref_actor.compute_logps(data_list, step)
+                    tensor_dicts = self.ref_actor.compute_logps(tensor_dicts, step)
                 if self.config.adv.estimator == "gae":
-                    data_list = self.critic.compute_values(data_list, step)
+                    tensor_dicts = self.critic.compute_values(tensor_dicts, step)
                 if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
-                    data_list = self.actor.compute_logps(data_list, step)
+                    tensor_dicts = self.actor.compute_logps(tensor_dicts, step)
 
                 if dist.get_rank() == 0:
                     if self.config.actor.kl.coef > 0:
-                        self.compute_approx_kl(data_list, step)
-                    self.compute_advantages(data_list, step)
+                        self.compute_approx_kl(tensor_dicts, step)
+                    self.compute_advantages(tensor_dicts, step)
 
-                state_dict = self.actor.update(data_list, step)
+                state_dict = self.actor.update(tensor_dicts, step)
                 if self.config.adv.estimator == "gae":
-                    self.critic.update(data_list, step)
-                self.save_ckpt(
+                    self.critic.update(tensor_dicts, step)
+                save_ckpt(
+                    self,
                     (self.actor, self.critic)
                     if self.config.adv.estimator == "gae"
                     else (self.actor,),
@@ -129,7 +134,7 @@ class PPOTrainer(Trainer):
                     for data_list in self.test_dataloader:
                         self.rollout(data_list, False, step)
 
-        self.save_model(self.actor)
+        save_model(self, self.actor)
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)

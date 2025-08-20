@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+from RL2.utils.sequences import position_ids_to_cu_seqlens
 
 def differentiable_all_reduce(tensor, device_mesh):
 
@@ -10,15 +11,6 @@ def differentiable_all_reduce(tensor, device_mesh):
         group=device_mesh.get_group()
     )
     return tensor + detached_tensor - tensor.detach()
-
-def sequence_all_reduce(tensor, cu_seqlens, device_mesh):
-
-    tensor = torch.stack([
-        tensor[:, start_idx:end_idx].sum()
-        for start_idx, end_idx
-        in zip(cu_seqlens[:-1], cu_seqlens[1:])
-    ])
-    return differentiable_all_reduce(tensor, device_mesh)
 
 def compute_logsumexp(logits, device_mesh, chunk_size=1024):
 
@@ -100,3 +92,52 @@ def compute_entropy(logits, logsumexp, device_mesh):
     return logsumexp - differentiable_all_reduce(
         (probs * logits).sum(-1), device_mesh
     )
+
+def aggregate_values(
+    tensor,
+    minibatch,
+    agg_mode,
+    total_actions=None,
+    total_sequences=None
+):
+    
+    if isinstance(tensor, tuple):
+        return tuple(
+            aggregate_values(
+                t,
+                minibatch,
+                agg_mode,
+                total_actions,
+                total_sequences
+            )
+            for t in tensor
+        )
+
+    if agg_mode == "all_token_mean":
+        return tensor.sum() / total_actions
+    elif agg_mode == "seq_token_sum":
+        cu_seqlens = position_ids_to_cu_seqlens(
+            minibatch["position_ids"]
+        )
+        return torch.stack([
+            tensor[start_idx:end_idx].sum()
+            for start_idx, end_idx in zip(
+                cu_seqlens[:-1], cu_seqlens[1:]
+            )
+        ])
+    elif agg_mode == "seq_mean_seq_token_mean":
+        return (
+            aggregate_values(
+                tensor,
+                minibatch,
+                "seq_token_sum"
+            ) / (
+                aggregate_values(
+                    minibatch["action_mask"],
+                    minibatch,
+                    "seq_token_sum"
+                ) + torch.finfo(tensor.dtype).eps
+            )
+        ).sum() / total_sequences
+    else:
+        raise NotImplementedError

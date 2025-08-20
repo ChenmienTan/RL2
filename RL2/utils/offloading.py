@@ -1,3 +1,4 @@
+import functools
 import torch
 from torch.distributed.fsdp._runtime_utils import _lazy_init
 
@@ -27,3 +28,14 @@ def load_optimizer_to_device(worker, device):
                     state[key] = value.to(
                         device, non_blocking=True
                     )
+
+def model_offloading_manager(func):
+
+    @functools.wraps(func)
+    def func_with_model_offloading(worker, *args, **kwargs):
+        load_model_to_device(worker, torch.cuda.current_device())
+        output = func(worker, *args, **kwargs)
+        load_model_to_device(worker, "cpu")
+        return output
+    
+    return func_with_model_offloading

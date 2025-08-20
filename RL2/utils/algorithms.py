@@ -1,6 +1,5 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from RL2.utils.functions import sequence_all_reduce
 
 def compute_approx_kl(
     logps: torch.Tensor,
@@ -20,22 +19,25 @@ def compute_approx_kl(
     else:
         raise NotImplementedError
 
-def compute_gae(data_list, gamma, lamda):
+def compute_gae(tensor_dicts, gamma, lamda):
 
     # extract rewards and values of action tokens
     rewards, values, action_mask = [], [], []
-    for ex in data_list:
-        indices = torch.where(ex["action_mask"])[0]
-        rewards.append(ex["rewards"][indices])
-        values.append(ex["values"][indices])
-        action_mask.append(ex["action_mask"][indices])
+    for td in tensor_dicts:
+        indices = torch.where(td["action_mask"])[0]
+        rewards.append(td["rewards"][indices])
+        values.append(td["values"][indices])
+        action_mask.append(td["action_mask"][indices])
     # pad to identical length for efficient computation
     rewards = pad_sequence(rewards, True)
     values = pad_sequence(values, True)
     action_mask = pad_sequence(action_mask, True)
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
-    next_values = torch.cat((values[:, 1:], torch.zeros((values.shape[0], 1))), -1)
+    next_values = torch.cat((
+        values[:, 1:],
+        torch.zeros((values.shape[0], 1))
+    ), -1)
     deltas = rewards + gamma * next_values - values
 
     # A_t = \delta_t + \gamma * \lambda * A_{t+1}
@@ -51,113 +53,35 @@ def compute_gae(data_list, gamma, lamda):
         action_gaes.std() + torch.finfo(gaes.dtype).eps
     )
 
-    for ex, gae, ret in zip(data_list, gaes, returns):
-        ex["advantages"] = torch.zeros_like(ex["rewards"])
-        ex["returns"] = torch.zeros_like(ex["rewards"])
-        indices = torch.where(ex["action_mask"])[0]
-        ex["advantages"][indices] = gae[:len(indices)]
-        ex["returns"][indices] = ret[:len(indices)]
+    for td, gae, ret in zip(tensor_dicts, gaes, returns):
+        td["advantages"] = torch.zeros_like(td["rewards"])
+        td["returns"] = torch.zeros_like(td["rewards"])
+        indices = torch.where(td["action_mask"])[0]
+        td["advantages"][indices] = gae[:len(indices)]
+        td["returns"][indices] = ret[:len(indices)]
 
 def compute_reinforce_adv(
-    data_list, responses_per_prompt, norm_var: bool
+    tensor_dicts,
+    responses_per_prompt,
+    global_norm: bool,
+    norm_var: bool
 ):
-    # Fallback to return-only baseline if there is only one response per prompt.
-    if responses_per_prompt == 1:
-        returns = torch.FloatTensor([ex["rewards"].sum() for ex in data_list])
-
-        if norm_var and len(returns) > 0:
-            mean = returns.mean()
-            std = returns.std()
-            returns = (returns - mean) / (std + torch.finfo(returns.dtype).eps)
-
-        for ex, advantage in zip(data_list, returns):
-            ex["advantages"] = advantage * ex["action_mask"]
-        return
-
-    # Otherwise, use per-prompt mean baseline across multiple responses
     rewards = torch.FloatTensor(
-        [ex["rewards"].sum() for ex in data_list]
+        [td["rewards"].sum() for td in tensor_dicts]
     ).view(-1, responses_per_prompt)
-    baseline = rewards.mean(-1)
-    advantages = rewards - baseline.unsqueeze(-1)
 
+    if global_norm:
+        baseline = rewards.mean()
+        std = rewards.std()
+    else:
+        baseline = rewards.mean(-1).unsqueeze(-1)
+        std = rewards.std(-1).unsqueeze(-1)
+
+    advantages = rewards - baseline
     if norm_var:
-        stds = rewards.std(-1)
-        advantages = advantages / (
-            stds.unsqueeze(-1) + torch.finfo(advantages.dtype).eps
+        advantages /= (
+            std + torch.finfo(advantages.dtype).eps
         )
 
-    for ex, advantage in zip(data_list, advantages.flatten()):
-        ex["advantages"] = advantage * ex["action_mask"]
-
-def compute_ppo_loss(worker, logps, minibatch, total_actions):
-    
-    ratio = torch.exp(
-        logps - minibatch.get("old_logps", logps.detach())
-    )
-    clipped_ratio = torch.clamp(
-        ratio, 1 - worker.config.clip, 1 + worker.config.clip
-    )
-    objective = minibatch["advantages"] * ratio
-    clipped_objective = minibatch["advantages"] * clipped_ratio
-    loss = - torch.min(objective, clipped_objective).sum() / total_actions
-    clip_ratio = (objective > clipped_objective).sum() / total_actions
-    
-    return loss, clip_ratio
-
-def compute_kimi_loss(worker, logps, minibatch, total_sequences):
-    
-    # https://arxiv.org/pdf/2501.12599
-    kwargs = {
-        "cu_seqlens": minibatch["cu_seqlens"],
-        "device_mesh": worker.device_mesh["sp"]
-    }
-    adv = sequence_all_reduce(
-        minibatch["eos_mask"] * minibatch["advantages"], **kwargs
-    )
-    log_ratio = sequence_all_reduce(
-        logps - minibatch.get("old_logps", logps.detach()), **kwargs
-    )
-    loss = (
-        adv - worker.config.tau * log_ratio
-    ).pow(2).sum() / total_sequences
-    return loss, 0.0
-
-def compute_gspo_loss(worker, logps, minibatch, total_sequences):
-
-    # https://arxiv.org/pdf/2507.18071
-    kwargs = {
-        "cu_seqlens": minibatch["cu_seqlens"],
-        "device_mesh": worker.device_mesh["sp"]
-    }
-    adv = sequence_all_reduce(
-        minibatch["eos_mask"] * minibatch["advantages"], **kwargs
-    )
-    log_ratio = sequence_all_reduce(
-        logps - minibatch.get("old_logps", logps.detach()), **kwargs
-    ) / sequence_all_reduce(
-        minibatch["action_mask"], **kwargs
-    )
-
-    ratio = torch.exp(log_ratio)
-    clipped_ratio = torch.clamp(
-        ratio, 1 - worker.config.clip, 1 + worker.config.clip
-    )
-    objective = adv * ratio
-    clipped_objective = adv * clipped_ratio
-    loss = - torch.min(objective, clipped_objective).sum() / total_sequences
-    clip_ratio = (objective > clipped_objective).sum() / total_sequences
-
-    return loss, clip_ratio
-
-def compute_surrogate_loss(
-    worker, logps, minibatch, total_actions, total_sequences
-):
-    if worker.config.loss == "ppo":
-        return compute_ppo_loss(worker, logps, minibatch, total_actions)
-    elif worker.config.loss == "kimi":
-        return compute_kimi_loss(worker, logps, minibatch, total_sequences)
-    elif worker.config.loss == "gspo":
-        return compute_gspo_loss(worker, logps, minibatch, total_sequences)
-    else:
-        raise NotImplementedError
+    for td, advantage in zip(tensor_dicts, advantages.flatten()):
+        td["advantages"] = advantage * td["action_mask"]

@@ -15,13 +15,14 @@ actor:
   max_length_per_device: null
   max_inference_length_per_device: ${actor.max_length_per_device}
   temperature: ${rollout.train_sampling_params.temperature}
-  loss: ppo
   update_per_rollout: 1
   clip: 0.2
+  agg_mode: all_token_mean
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
-  warmup_ratio: 0.0
+  scheduler: constant
+  warmup_ratio: 0.1
   freeze_steps: 0
   offload_model: true
   offload_optimizer: true
@@ -99,9 +100,11 @@ critic:
   max_inference_length_per_device: ${critic.max_length_per_device}
   update_per_rollout: 12
   clip: 0.5
+  agg_mode: ${actor.agg_mode}
   lr: 5e-6
   weight_decay: ${actor.weight_decay}
   max_grad_norm: ${actor.max_grad_norm}
+  scheduler: ${actor.scheduler}
   warmup_ratio: ${actor.warmup_ratio}
   offload_model: ${actor.offload_model}
   offload_optimizer: ${actor.offload_optimizer}
@@ -110,15 +113,16 @@ adv:
   estimator: reinforce # `reinforce` or `gae`
   gamma: 1.0
   lamda: 1.0
+  global_norm: false
   norm_var: false
   
 trainer:
   project: null
   experiment_name: null
-  load_ckpt_from_dir: null
+  load_ckpt_from: null
   n_epochs: 1
   test_freq: null
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null
-  disable_wandb: false
+  use_wandb: true
   

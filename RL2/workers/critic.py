@@ -2,9 +2,10 @@ from collections import defaultdict
 import torch
 from transformers import AutoModelForTokenClassification
 from RL2.workers import Worker
-from RL2.utils.sequences import count_total
-from RL2.utils.ring_attn import update_params_of_ring_attn
-from RL2.utils.offloading import load_model_to_device
+from RL2.utils.sequences import data_manager, count_total
+from RL2.utils.ring_attn import ring_attn_manager
+from RL2.utils.functions import aggregate_values
+from RL2.utils.offloading import model_offloading_manager
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -27,10 +28,8 @@ class Critic(Worker):
 
         self.prepare_model_optimizer()
 
+    @ring_attn_manager
     def forward(self, minibatch) -> torch.Tensor:
-        update_params_of_ring_attn(
-            minibatch["cu_seqlens"], self.device_mesh["sp"]
-        )
 
         return self.model(
             input_ids=minibatch["states"],
@@ -39,23 +38,21 @@ class Critic(Worker):
         ).logits.squeeze(-1) * minibatch["action_mask"]
 
     @time_logger("compute_values")
+    @model_offloading_manager
     @torch.no_grad()
-    def compute_values(self, data_list, step):
-        load_model_to_device(self, torch.cuda.current_device())
-        minibatches = self.scatter_and_pack_data_list(data_list)
+    @data_manager(gather=True)
+    def compute_values(self, minibatches, step):
 
         self.model.eval()
         for minibatch in progress_bar(minibatches, desc="Compute values"):
             minibatch["values"] = self.forward(minibatch)
         
-        load_model_to_device(self, "cpu")
-        return self.unpack_and_gather_data_list(minibatches)
+        return minibatches
 
     @time_logger("update_critic")
-    def update(self, data_list, step: int):
-
-        load_model_to_device(self, torch.cuda.current_device())
-        batches = self.scatter_and_pack_data_list(data_list, True)
+    @model_offloading_manager
+    @data_manager(pack_minibatches=True)
+    def update(self, batches, step: int):
 
         self.model.train()
         tbar = progress_bar(
@@ -65,7 +62,11 @@ class Critic(Worker):
         metrics = defaultdict(list)
         for batch in batches:
 
-            total_actions = count_total(batch, "action_mask", self.device_mesh)
+            total_actions, total_sequences = count_total(
+                batch,
+                ("action_mask", "eos_mask"),
+                self.device_mesh["dp"]
+            )
             metric = defaultdict(list)
             for minibatch in batch:
 
@@ -77,9 +78,17 @@ class Critic(Worker):
                 )
                 mse = (values - minibatch["returns"]).pow(2)
                 clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
-                loss = torch.max(mse, clipped_mse).sum() / total_actions
-                clip_ratio = (mse < clipped_mse).sum() / total_actions
-                
+                losses = torch.max(mse, clipped_mse)
+                clip_ratios = (mse < clipped_mse)
+
+                loss, clip_ratio = aggregate_values(
+                    (losses, clip_ratios),
+                    minibatch,
+                    self.config.agg_mode,
+                    total_actions,
+                    total_sequences
+                )
+
                 self.backward(loss)
 
                 tbar.update()
@@ -90,10 +99,8 @@ class Critic(Worker):
             
             for k, v in metric.items():
                 metrics[k].append(
-                    gather_and_reduce(v, self.device_mesh)
+                    gather_and_reduce(v, self.device_mesh["dp"])
                 )
             metrics["critic/grad_norm"].append(grad_norm)
 
         rank0_log(metrics, step)
-
-        load_model_to_device(self, "cpu")

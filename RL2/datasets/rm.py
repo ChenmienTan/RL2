@@ -1,5 +1,4 @@
-import torch
-from RL2.datasets import BaseDataset
+from RL2.datasets import BaseDataset, tokenize_messages
 
 
 class RMDataset(BaseDataset):
@@ -17,17 +16,13 @@ class RMDataset(BaseDataset):
         return chosen, rejected
 
     def tokenize_messages_completion(self, messages, completion):
-
-        states = self.tokenizer.apply_chat_template(
-            messages + [{"role": "assistant", "content": completion}]
-        )[:self.max_length]
-        action_mask = (len(states) - 1) * [0] + [1]
-
-        return {
-            "states": torch.LongTensor(states),
-            "action_mask": torch.LongTensor(action_mask),
-            "position_ids": torch.arange(len(states))
-        }
+        return tokenize_messages(
+            self.tokenizer,
+            messages + [{"role": "assistant", "content": completion}],
+            self.config.apply_chat_template,
+            self.config.max_length,
+            False
+        )
     
     def collate_fn(self, batch):
         return sum([list(ex) for ex in batch], [])
