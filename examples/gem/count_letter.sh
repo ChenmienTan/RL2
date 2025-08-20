@@ -20,7 +20,7 @@ torchrun \
     -m RL2.trainer.ppo \
     \
     trainer.project=gem \
-    trainer.experiment_name=rl2-qwen3-1.7b-${env}-ppo-epoch-2 \
+    trainer.experiment_name=rl2-qwen3-1.7b-${env} \
     trainer.n_epochs=500 \
     trainer.test_freq=9999999 \
     trainer.save_freq=9999999 \
@@ -33,6 +33,7 @@ torchrun \
     actor.max_length_per_device=8192 \
     actor.sp_size=2 \
     actor.update_per_rollout=2 \
+    actor.warmup_ratio=0.0 \
     \
     adv.estimator=reinforce \
     adv.norm_var=true \
@@ -41,7 +42,8 @@ torchrun \
     rollout.use_gem_env=true \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
     rollout.tp_size=1 \
-    rollout.train_sampling_params.max_new_tokens=8192  \
+    rollout.train_sampling_params.max_new_tokens=8192 \
+    rollout.apply_chat_template=false \
     rollout.gem_env.env_id=${env} \
     rollout.gem_env.wrappers="" \
     rollout.gem_env.num_env=16 \
