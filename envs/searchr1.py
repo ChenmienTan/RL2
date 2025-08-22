@@ -5,7 +5,7 @@ import requests
 def interact(messages):
 
     match = re.search(
-        r"<search>(.*?)</search>", messages[-1]["content"]
+        r"<search>\s*(.*?)\s*</search>", messages[-1]["content"], re.DOTALL
     )
     if match is None:
         return []
@@ -41,7 +41,7 @@ def normalize_answer(s):
 def reward_fn(messages, answer):
 
     preds = re.findall(
-        r"<answer>(.*?)</answer>", messages[-1]["content"]
+        r"<answer>\s*(.*?)\s*</answer>", messages[-1]["content"], re.DOTALL
     )
     if len(preds) == 0:
         return False
