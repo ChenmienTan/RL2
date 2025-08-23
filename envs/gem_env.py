@@ -117,8 +117,7 @@ class GEMEnvironmentManager:
         # Instantiate vectorized environment
         # Note: gem.make_vec expects a single env_id and num_envs parameter, not a list of env_ids
         self.env = gem.make_vec(
-            self.gem_config.env_id,  # Single env_id, not a list
-            num_envs=self.gem_config.num_env,  # Number of environments to create
+            [self.gem_config.env_id] * self.gem_config.num_env,
             vec_kwargs=[
                 {"seed": self.gem_config.get("seed", 233) + j} 
                 for j in range(self.gem_config.num_env)
