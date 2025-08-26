@@ -90,12 +90,14 @@ class GEMRollout(Rollout):
         # Generate response using the language model
         try:
             response = await self.llm.async_generate(
-                formatted_obs,
-                sampling_params=self.train_sampling_params if train else self.test_sampling_params
+                input_ids=prompt_ids,
+                sampling_params=self.train_sampling_params if train else self.test_sampling_params,
+                return_logprob=True
             )
             
             meta_info = response["meta_info"]
-            
+            logp, state, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+
             # Truncate to actual completion tokens if needed
             content = self.tokenizer.decode(
                 self.tokenizer.encode(
@@ -121,6 +123,7 @@ class GEMRollout(Rollout):
                 "prompt_ids": prompt_ids,
                 "response": content,
                 "response_ids": response_ids,
+                "llm_logps": logp,
                 "response_is_truncated": response_is_truncated,
                 "action_is_formatted": extracted_action != INVALID_ACTION,
                 "generation_failed": False,
@@ -232,6 +235,7 @@ class GEMRollout(Rollout):
                         prompt_ids=extras[i]["prompt_ids"],
                         response=extras[i]["response"],
                         response_ids=extras[i]["response_ids"],
+                        llm_logps=extras[i]["llm_logps"],
                         response_is_truncated=extras[i]["response_is_truncated"],
                         action_is_formatted=extras[i]["action_is_formatted"],
                     )
@@ -357,7 +361,7 @@ class GEMRollout(Rollout):
                 if last_action_idx >= 0:
                     eos_mask[last_action_idx] = 1
                 ex["eos_mask"] = eos_mask
-                
+                ex["llm_logps"] = transition.llm_logps
                 # Note: Removed gem_info dict to avoid dtype issues in RL2 training pipeline
                 # All fields must be tensors for the distributed training to work correctly
                 

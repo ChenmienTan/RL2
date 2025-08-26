@@ -3,13 +3,14 @@ from RL2.datasets.base import BaseDataset, load_dataset
 
 class RLDataset(BaseDataset):
     
-    def __init__(self, data_path, responses_per_prompt):
+    def __init__(self, config, tokenizer):
+        self.config = config
         # Handle None data_path for GEM environments
-        if data_path:
-            self.dataset = load_dataset(data_path)
+        if config.path:
+            self.dataset = load_dataset(config.path)
         else:
             self.dataset = []  # Empty dataset for GEM environments
-        self.responses_per_prompt = responses_per_prompt
+        self.tokenizer = tokenizer
 
     def __len__(self):
         # Return 1 for empty datasets to maintain training loop

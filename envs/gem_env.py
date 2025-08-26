@@ -80,6 +80,7 @@ class GEMTransition:
     prompt_ids: list
     response: str
     response_ids: list
+    llm_logps: list
     
     response_is_truncated: bool
     action_is_formatted: bool
