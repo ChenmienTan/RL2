@@ -105,7 +105,7 @@ class Actor(Worker):
             
             total_actions, total_sequences = count_total(
                 batch,
-                ("action_mask", "eos_mask"),
+                ("action_mask", "sos_mask"),
                 self.device_mesh["dp"]
             )
             metric = defaultdict(list)
@@ -125,6 +125,12 @@ class Actor(Worker):
                 losses = - torch.min(objective, clipped_objective)
                 clip_ratios = objective > clipped_objective
 
+                if self.config.tis_coef > 0:
+                    raw_tis = torch.exp(logps - minibatch["llm_logps"])
+                    tis = raw_tis.clamp(max=self.config.tis_coef)
+                    tis_clamp_ratio = (raw_tis > self.config.tis_coef).float()
+                    losses *= tis
+
                 loss, clip_ratio, entropy = aggregate_values(
                     (losses, clip_ratios, entropy),
                     minibatch,
@@ -132,6 +138,15 @@ class Actor(Worker):
                     total_actions,
                     total_sequences
                 )
+                
+                if self.config.tis_coef > 0:
+                    raw_tis_agg, tis_agg, tis_clamp_ratio_agg = aggregate_values(
+                        (raw_tis, tis, tis_clamp_ratio),
+                        minibatch,
+                        self.config.agg_mode,
+                        total_actions,
+                        total_sequences
+                    )
 
                 loss = loss - self.config.entropy.coef * entropy
                 if self.config.kl.coef > 0 and self.config.kl.type == "loss":
@@ -148,6 +163,10 @@ class Actor(Worker):
                 metric["actor/entropy"].append(entropy.item())
                 metric["actor/loss"].append(loss.item())
                 metric["actor/clip_ratio"].append(clip_ratio.item())
+                if self.config.tis_coef > 0:
+                    metric["actor/raw_tis"].append(raw_tis_agg.item())
+                    metric["actor/tis"].append(tis_agg.item())
+                    metric["actor/tis_clamp_ratio"].append(tis_clamp_ratio_agg.item())
 
             grad_norm = self.optimizer_step()
 

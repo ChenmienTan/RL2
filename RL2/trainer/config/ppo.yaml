@@ -1,12 +1,16 @@
-data:
-  train_data_path: null
-  test_data_path: null
+train_data:
+  path: null
+  apply_chat_template: true
   prompts_per_rollout: null
   responses_per_prompt: null
+
+test_data:
+  path: null
+  apply_chat_template: true
+  response_per_rollout: 1
   
 actor:
   model_name: null
-  tokenizer_name: ${actor.model_name}
   use_liger_kernel: false
   gradient_checkpointing: true
   ddp_size: 1
@@ -21,6 +25,7 @@ actor:
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
+  tis_coef: 0.0
   scheduler: constant
   warmup_ratio: 0.1
   freeze_steps: 0
@@ -39,10 +44,10 @@ actor:
 
 rollout:
   model_name: ${actor.model_name}
-  tokenizer_name: ${rollout.model_name}
+  dtype: bfloat16
   tp_size: 1
   gpu_memory_utilization: 0.5
-  responses_per_prompt: ${data.responses_per_prompt}
+  responses_per_prompt: ${train_data.responses_per_prompt}
   apply_chat_template: true
   train_sampling_params:
     temperature: 1.0
@@ -80,7 +85,6 @@ rollout:
 
 ref_actor:
   model_name: ${actor.model_name}
-  tokenizer_name: ${ref_actor.model_name}
   use_liger_kernel: ${actor.use_liger_kernel}
   ddp_size: ${actor.ddp_size}
   tp_size: ${actor.tp_size}
@@ -91,7 +95,6 @@ ref_actor:
 
 critic:
   model_name: ${actor.model_name}
-  tokenizer_name: ${critic.model_name}
   gradient_checkpointing: ${actor.gradient_checkpointing}
   ddp_size: ${actor.ddp_size}
   tp_size: ${actor.tp_size}

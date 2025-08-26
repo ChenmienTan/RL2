@@ -6,7 +6,6 @@ data:
 
 actor:
   model_name: null
-  tokenizer_name: ${actor.model_name}
   use_liger_kernel: false
   gradient_checkpointing: true
   ddp_size: 1

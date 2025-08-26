@@ -16,8 +16,8 @@ from RL2.utils.logging import progress_bar, time_logger, gather_and_log
 @data_manager(pair=True)
 def update(worker, minibatches, step):
 
-    total_sequences = count_total(
-        minibatches, "eos_mask", worker.device_mesh["dp"]
+    total_pairs = count_total(
+        minibatches, "sos_mask", worker.device_mesh["dp"]
     ) // 2
     metrics = defaultdict(list)
     for minibatch in progress_bar(
@@ -30,7 +30,7 @@ def update(worker, minibatches, step):
             "seq_token_sum"
         ).view(-1, 2).T
         reward_margins = chosen_rewards - rejected_rewards
-        loss = - F.logsigmoid(reward_margins).sum() / total_sequences
+        loss = - F.logsigmoid(reward_margins).sum() / total_pairs
         worker.backward(loss)
 
         metrics["rewards/chosen"].extend(chosen_rewards.tolist())
@@ -63,7 +63,8 @@ class DPOTrainer(Trainer):
 
         step = load_ckpt(self, (self.actor,))
         for epoch in range(
-            step // len(self.train_dataloader), self.config.trainer.n_epochs
+            step // len(self.train_dataloader),
+            self.config.trainer.n_epochs
         ):
             for tensor_dicts in tqdm(
                 self.train_dataloader,

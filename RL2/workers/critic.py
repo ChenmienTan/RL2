@@ -64,7 +64,7 @@ class Critic(Worker):
 
             total_actions, total_sequences = count_total(
                 batch,
-                ("action_mask", "eos_mask"),
+                ("action_mask", "sos_mask"),
                 self.device_mesh["dp"]
             )
             metric = defaultdict(list)
@@ -79,7 +79,7 @@ class Critic(Worker):
                 mse = (values - minibatch["returns"]).pow(2)
                 clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
                 losses = torch.max(mse, clipped_mse)
-                clip_ratios = (mse < clipped_mse)
+                clip_ratios = mse < clipped_mse
 
                 loss, clip_ratio = aggregate_values(
                     (losses, clip_ratios),

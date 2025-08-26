@@ -33,7 +33,7 @@ def time_logger(name):
         return wrapper
     return decorator
 
-def gather_and_log(metrics, device_mesh, step):
+def gather_and_log(metrics, device_mesh, step, metrics_to_sum=["loss"]):
 
     metrics = {
         k: gather_and_concat_list(v, device_mesh)
@@ -41,7 +41,7 @@ def gather_and_log(metrics, device_mesh, step):
     }
     if dist.get_rank() == 0:
         metrics = {
-            k: sum(v) / (1.0 if k == "loss" else len(v))
+            k: sum(v) / (1.0 if k in metrics_to_sum else len(v))
             for k, v in metrics.items()
         }
         tqdm.write(f"Step {step}, " + ", ".join([

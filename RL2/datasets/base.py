@@ -29,39 +29,15 @@ def get_dataloader(dataset, batch_size):
         collate_fn=dataset.collate_fn
     )
 
-def tokenize_messages(
-    tokenizer,
-    messages,
-    apply_chat_template=True,
+def get_tensor_dict(
+    states,
+    actions,
+    action_mask,
     max_length=None,
-    shift=True
+    rm=False
 ):
 
-    states, actions, action_mask = [], [], []
-    for idx, message in enumerate(messages):
-
-        if apply_chat_template:
-            next_states = tokenizer.apply_chat_template(
-                messages[:idx + 1],
-                add_generation_prompt=idx + 1 < len(messages) and messages[idx + 1]["role"] == "assistant"
-            )
-            assert next_states[:len(states)] == states, \
-                "Your tokenizer should be increasing, i.e., adding a new message should not change the tokenization of previous messages. For example, if you use Qwen3 in multi-turn cases, previous thinking may be eliminated. In this case, you may set `tokenizer_name=Chenmien/Qwen3-Increasing-Tokenizer`."
-            state = next_states[len(states):]
-        else:
-            state = tokenizer.encode(
-                message["content"], add_special_tokens=False
-            )
-
-        states.extend(state)
-        if message["role"] == "assistant":
-            actions.extend(state)
-            action_mask.extend(len(state) * [1])
-        else:
-            actions.extend(len(state) * [0])
-            action_mask.extend(len(state) * [0])
-
-    if shift:
+    if not rm:
         states = states[:-1]
         actions = actions[1:]
         action_mask = action_mask[1:]
@@ -70,25 +46,77 @@ def tokenize_messages(
         actions = actions[:max_length]
         action_mask = action_mask[:max_length]
 
-    return {
+    tensor_dict = {
         "states": torch.LongTensor(states),
-        "actions": torch.LongTensor(actions),
-        "action_mask": torch.LongTensor(action_mask),
-        "eos_mask": torch.LongTensor((len(states) - 1) * [0] + [1]),
+        "sos_mask": torch.LongTensor([1] + (len(states) - 1) * [0]),
         "position_ids": torch.arange(len(states))
     }
+    if rm:
+        tensor_dict["action_mask"] = torch.LongTensor(
+            (len(states) - 1) * [0] + [1]
+        )
+    else:
+        tensor_dict["actions"] = torch.LongTensor(actions)
+        tensor_dict["action_mask"] = torch.LongTensor(action_mask)
+
+    return tensor_dict
 
 class BaseDataset(Dataset):
     
-    def __init__(
-        self,
-        config,
-        tokenizer
-    ):
+    def __init__(self, config, tokenizer):
 
         self.config = config
         self.dataset = load_dataset(config.path)
         self.tokenizer = tokenizer
+
+    def tokenize_prompt_response(
+        self, prompt, response, rm=False
+    ):
+        
+        prompt = self.tokenizer.encode(
+            prompt, add_special_tokens=False
+        )
+        response = self.tokenizer.encode(
+            response + self.tokenizer.eos_token,
+            add_special_tokens=False
+        )
+        
+        states = prompt + response
+        actions = len(states) * [0] + response
+        action_mask = len(states) * [0] + len(response) * [1]
+        
+        return get_tensor_dict(
+            states, actions, action_mask, self.config.max_length, rm
+        )
+
+    def tokenize_messages(self, messages, rm=False):
+
+        prev_text, states, actions, action_mask = "", [], [], []
+        for turn in range(len(messages)):
+            is_this_turn_assistant = messages[turn]["role"] == "assistant"
+            is_next_turn_assistant = turn + 1 < len(messages) and messages[turn + 1]["role"] == "assistant"
+
+            text = self.tokenizer.apply_chat_template(
+                messages[:turn + 1],
+                add_generation_prompt=is_next_turn_assistant,
+                tokenize=False
+            )
+            assert text[:len(prev_text)] == prev_text
+            state = self.tokenizer.encode(
+                text[len(prev_text):], add_special_tokens=False
+            )
+            states.extend(state)
+            actions.extend(
+                state
+                if is_this_turn_assistant
+                else len(state) * [0]
+            )
+            action_mask.extend(len(state) * [is_this_turn_assistant])
+            prev_text = text
+
+        return get_tensor_dict(
+            states, actions, action_mask, self.config.max_length, rm
+        )
 
     def __len__(self):
         return len(self.dataset)

@@ -6,7 +6,6 @@ data:
 
 critic:
   model_name: null
-  tokenizer_name: ${critic.model_name}
   gradient_checkpointing: true
   ddp_size: 1
   tp_size: 1

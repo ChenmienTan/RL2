@@ -1,10 +1,10 @@
 torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
-    data.train_data_path=Chenmien/OpenReasonerZero \
-    data.test_data_path=Chenmien/OlympiadBench \
-    data.prompts_per_rollout=128 \
-    data.responses_per_prompt=64 \
+    train_data.path=Chenmien/OpenReasonerZero \
+    train_data.prompts_per_rollout=128 \
+    train_data.responses_per_prompt=64 \
+    test_data.path=Chenmien/OlympiadBench \
     actor.model_name=Qwen/Qwen2.5-7B \
     actor.sp_size=2 \
     actor.max_length_per_device=8192 \

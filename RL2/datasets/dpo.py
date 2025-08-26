@@ -1,12 +1,24 @@
-from RL2.datasets import RMDataset, tokenize_messages
+from RL2.datasets import RMDataset
 
 
 class DPODataset(RMDataset):
     
-    def tokenize_messages_completion(self, messages, completion):
-        return tokenize_messages(
-            self.tokenizer,
-            messages + [{"role": "assistant", "content": completion}],
-            self.config.apply_chat_template,
-            self.config.max_length
-        )
+    def __getitem__(self, idx):
+
+        ex = self.dataset[idx]
+        if self.config.apply_chat_template:
+            return self.tokenize_messages(
+                ex["messages"] + [
+                    {"role": "assistant", "content": ex["chosen"]}
+                ]
+            ), self.tokenize_messages(
+                ex["messages"] + [
+                    {"role": "assistant", "content": ex["rejected"]}
+                ]
+            )
+        else:
+            return self.tokenize_prompt_response(
+                ex["prompt"], ex["chosen"]
+            ), self.tokenize_prompt_response(
+                ex["prompt"], ex["rejected"]
+            )

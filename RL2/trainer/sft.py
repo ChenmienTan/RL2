@@ -17,7 +17,7 @@ def update(worker, minibatches, step):
 
     total_actions, total_sequences = count_total(
         minibatches,
-        ("action_mask", "eos_mask"),
+        ("action_mask", "sos_mask"),
         worker.device_mesh["dp"]
     )
     metrics = defaultdict(list)
@@ -58,7 +58,8 @@ class SFTTrainer(Trainer):
 
         step = load_ckpt(self, (self.actor,))
         for epoch in range(
-            step // len(self.train_dataloader), self.config.trainer.n_epochs
+            step // len(self.train_dataloader),
+            self.config.trainer.n_epochs
         ):
             for tensor_dicts in tqdm(
                 self.train_dataloader,

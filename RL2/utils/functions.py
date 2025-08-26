@@ -50,39 +50,23 @@ def gather_action_logits(logits, actions, device_mesh):
     # On each device, we gather logits for actions on the device, and then 
     # perform AllReduce to collect the complete logits.
     rank = device_mesh.get_local_rank()
+    start_idx = rank * logits.shape[-1]
+    end_idx = (rank + 1) * logits.shape[-1]
 
-    local_vocab_size = torch.LongTensor(
-        [logits.shape[-1]]
-    ).to(torch.cuda.current_device())
-    vocab_sizes = [
-        torch.zeros_like(local_vocab_size)
-        for _ in range(device_mesh.size())
-    ]
-    dist.all_gather(
-        vocab_sizes,
-        local_vocab_size,
-        group=device_mesh.get_group()
+    local_mask = (actions >= start_idx) & (actions < end_idx)
+    local_actions = torch.where(
+        local_mask, actions - start_idx, 0
     )
-    cu_vocab_sizes = torch.cumsum(
-        torch.cat(
-            [torch.zeros_like(local_vocab_size)] + vocab_sizes
-        ), 0
+
+    action_logits = torch.where(
+        local_mask,
+        torch.gather(
+            logits,
+            dim=-1,
+            index=local_actions.unsqueeze(-1)
+        ).squeeze(-1),
+        0.0
     )
-    action_device_mapping = (
-        actions < cu_vocab_sizes[1:].unsqueeze(-1)
-    ).to(torch.float32).argmax(0)
-    local_action_indices = torch.where(
-        action_device_mapping == rank
-    )[0]
-    local_actions = actions[:, local_action_indices] - cu_vocab_sizes[rank]
-    action_logits = torch.zeros(
-        actions.shape, device=torch.cuda.current_device()
-    )
-    action_logits[:, local_action_indices] = torch.gather(
-        logits[:, local_action_indices],
-        dim=-1,
-        index=local_actions.unsqueeze(-1)
-    ).squeeze(-1)
 
     return differentiable_all_reduce(action_logits, device_mesh)
 
