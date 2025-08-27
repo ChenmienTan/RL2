@@ -25,8 +25,8 @@ torchrun \
     trainer.test_freq=9999999 \
     trainer.save_freq=9999999 \
     \
-    data.responses_per_prompt=1 \
-    data.prompts_per_rollout=1 \
+    train_data.responses_per_prompt=1 \
+    train_data.prompts_per_rollout=1 \
     \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
     actor.lr=1e-6 \
@@ -34,6 +34,7 @@ torchrun \
     actor.sp_size=2 \
     actor.update_per_rollout=2 \
     actor.warmup_ratio=0.0 \
+    actor.tis_coef=2.0 \
     \
     adv.estimator=reinforce \
     adv.norm_var=true \

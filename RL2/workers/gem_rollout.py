@@ -17,10 +17,10 @@ import torch.distributed as dist
 from tqdm.asyncio import tqdm
 
 from RL2.workers.rollout import Rollout
-from RL2.datasets import tokenize_messages
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 from envs.gem_env import GEMEnvironmentManager, INVALID_ACTION, GEMTransition
+from RL2.datasets import get_tensor_dict
 
 
 class GEMRollout(Rollout):
@@ -40,12 +40,41 @@ class GEMRollout(Rollout):
             self.gem_env_manager = GEMEnvironmentManager(config, self.tokenizer)
             self.num_envs = self.gem_env_manager.env.num_envs
     
+
     def prepare_environment(self):
         """Override to skip base class environment loading for GEM environments."""
         # GEM environments are handled by GEMEnvironmentManager
         # We don't need to load a Python module from env_path
         pass
     
+    def tokenize_messages(self, messages, rm=False):
+        prev_text, states, actions, action_mask = "", [], [], []
+        for turn in range(len(messages)):
+            is_this_turn_assistant = messages[turn]["role"] == "assistant"
+            is_next_turn_assistant = turn + 1 < len(messages) and messages[turn + 1]["role"] == "assistant"
+
+            text = self.tokenizer.apply_chat_template(
+                messages[:turn + 1],
+                add_generation_prompt=is_next_turn_assistant,
+                tokenize=False
+            )
+            assert text[:len(prev_text)] == prev_text
+            state = self.tokenizer.encode(
+                text[len(prev_text):], add_special_tokens=False
+            )
+            states.extend(state)
+            actions.extend(
+                state
+                if is_this_turn_assistant
+                else len(state) * [0]
+            )
+            action_mask.extend(len(state) * [is_this_turn_assistant])
+            prev_text = text
+
+        return get_tensor_dict(
+            states, actions, action_mask
+        )
+
     async def generate_action_for_observation(
         self, 
         observation: str, 
@@ -72,7 +101,7 @@ class GEMRollout(Rollout):
         
         # Tokenize to check length
         prompt_ids = self.tokenizer(formatted_obs, add_special_tokens=False).input_ids
-        
+        logps = len(prompt_ids) * [0]
         # Check if prompt exceeds max length
         max_model_len = self.config.gem_env.get("max_model_len", 12800)
         if len(prompt_ids) >= max_model_len:
@@ -81,6 +110,7 @@ class GEMRollout(Rollout):
                 "prompt_ids": prompt_ids,
                 "response": "",
                 "response_ids": [],
+                "llm_logps": logps,
                 "response_is_truncated": True,
                 "action_is_formatted": False,
                 "generation_failed": True,
@@ -98,14 +128,10 @@ class GEMRollout(Rollout):
             meta_info = response["meta_info"]
             logp, state, _ = map(list, zip(*meta_info["output_token_logprobs"]))
 
-            # Truncate to actual completion tokens if needed
-            content = self.tokenizer.decode(
-                self.tokenizer.encode(
-                    response["text"], add_special_tokens=False
-                )[:meta_info["completion_tokens"]]
-            )
-            
-            response_ids = self.tokenizer.encode(content, add_special_tokens=False)
+            response_ids = state
+            content = response["text"]
+            logps.extend(logp)
+
             response_is_truncated = meta_info["finish_reason"]["type"] == "length"
             
             # Extract structured action from response
@@ -123,7 +149,7 @@ class GEMRollout(Rollout):
                 "prompt_ids": prompt_ids,
                 "response": content,
                 "response_ids": response_ids,
-                "llm_logps": logp,
+                "llm_logps": logps,
                 "response_is_truncated": response_is_truncated,
                 "action_is_formatted": extracted_action != INVALID_ACTION,
                 "generation_failed": False,
@@ -138,6 +164,7 @@ class GEMRollout(Rollout):
                 "prompt_ids": prompt_ids,
                 "response": "",
                 "response_ids": [],
+                "llm_logps": logps,
                 "response_is_truncated": True,
                 "action_is_formatted": False,
                 "generation_failed": True,
@@ -313,25 +340,10 @@ class GEMRollout(Rollout):
                 if not transition.response_ids:
                     continue
                 
-                # Build messages for tokenization
-                messages = [
-                    {"role": "user", "content": transition.prompt},
-                    {"role": "assistant", "content": transition.response}
-                ]
-                
-                # Tokenize using RL2's tokenization function
-                # This creates states, actions, action_mask, and position_ids
-                ex = tokenize_messages(
-                    self.tokenizer,
-                    messages,
-                    self.config.gem_env.get("apply_chat_template", True)
-                )
-                
-                # Validate that we have the expected fields
-                assert "states" in ex, "Missing states field from tokenization"
-                assert "actions" in ex, "Missing actions field from tokenization"
-                assert "action_mask" in ex, "Missing action_mask field from tokenization"
-                assert "position_ids" in ex, "Missing position_ids field from tokenization"
+                states = transition.prompt_ids + transition.response_ids
+                actions = len(transition.prompt_ids) * [0] + transition.response_ids
+                action_mask = len(transition.prompt_ids) * [0] + len(transition.response_ids) * [1]
+                ex = get_tensor_dict(states, actions, action_mask)
                 
                 # Add reward information
                 # RL2 expects dense rewards - zeros for all tokens except the last
@@ -361,10 +373,9 @@ class GEMRollout(Rollout):
                 if last_action_idx >= 0:
                     eos_mask[last_action_idx] = 1
                 ex["eos_mask"] = eos_mask
-                ex["llm_logps"] = transition.llm_logps
-                # Note: Removed gem_info dict to avoid dtype issues in RL2 training pipeline
-                # All fields must be tensors for the distributed training to work correctly
+                ex["llm_logps"] = torch.FloatTensor(transition.llm_logps[1:])
                 
+                assert ex["llm_logps"].shape[0] == ex["action_mask"].shape[0]
                 data_list.append(ex)
         
         # Subsample if we have too many trajectories.
