@@ -4,24 +4,180 @@ GEM Rollout Worker for RL2
 This module provides a specialized rollout worker for GEM environment integration.
 It extends the base Rollout class to handle GEM environment interaction with
 proper support for vectorized environments and parallel async generation.
+
+This module is self-contained and includes all GEM environment functionality.
 """
 
 import asyncio
-import json
+import re
+import logging
 from collections import defaultdict
 from typing import List, Tuple, Dict, Any
-from copy import deepcopy
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
 from tqdm.asyncio import tqdm
 
 from RL2.workers.rollout import Rollout
-from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
+from RL2.utils.comm import gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from envs.gem_env import GEMEnvironmentManager, INVALID_ACTION, GEMTransition
 
+import gem
+from gem.utils.parsing import extract_last_boxed_answer
+from gem.wrappers.wrapper_factory import get_wrapper_fns
+
+
+# Invalid action to be sent to the env to trigger format error penalty
+INVALID_ACTION = "<｜INVALID_ACTION｜>"
+
+
+def apply_qwen3_game_template(observation: str) -> str:
+    """Apply Qwen3 game-specific template to observation."""
+    return (
+        f"<|im_start|>user\nYou are playing language games. Make valid actions to win.\nObservation: {observation}"
+        "\nPlease reason step by step, and put your final answer within \\boxed{}.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
+def apply_no_template(observation: str) -> str:
+    """Apply no template - return observation as-is."""
+    return observation
+
+
+def apply_qwen3_general_template(question: str) -> str:
+    """Apply Qwen3 general template to question."""
+    return (
+        f"<|im_start|>user\nQuestion: {question}"
+        "\nPlease reason step by step, and put your final answer within \\boxed{}.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
+def apply_code_template(question: str) -> str:
+    """Apply code-specific template to question."""
+    return (
+        "You are an expert Python programmer. "
+        "You will be given a question (problem specification) and will generate a correct "
+        "Python program that matches the specification and passes all tests."
+        f"\nQuestion: {question}"
+        "\nPlease reason step by step, and write your code in markdown format, e.g., ```python\n# YOUR CODE HERE\n```."
+    )
+
+
+TEMPLATE_FACTORY = {
+    "qwen3_game": apply_qwen3_game_template,
+    "no": apply_no_template,
+    "qwen3_general": apply_qwen3_general_template,
+    "code": apply_code_template,
+}
+
+
+@dataclass
+class GEMTransition:
+    """Data structure for GEM environment transitions."""
+    obs: str
+    action: str
+    reward: float
+    done: bool
+    
+    prompt: str
+    prompt_ids: list
+    response: str
+    response_ids: list
+    llm_logps: list
+    
+    response_is_truncated: bool
+    action_is_formatted: bool
+    
+    def format(self):
+        """Format transition for logging/debugging."""
+        return {
+            "obs": self.obs,
+            "action": self.action,
+            "reward": self.reward,
+            "done": int(self.done),
+            "prompt": self.prompt,
+            "response": self.response,
+        }
+
+
+class GEMEnvironmentManager:
+    """Manages GEM environment integration for RL2."""
+    
+    def __init__(self, config, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        self.gem_config = config.gem_env
+        
+        # Get environment wrappers
+        wrappers = get_wrapper_fns(self.gem_config.wrappers, tokenizer=tokenizer)
+        
+        # Instantiate vectorized environment
+        # Note: gem.make_vec expects a single env_id and num_envs parameter, not a list of env_ids
+        self.env = gem.make_vec(
+            [self.gem_config.env_id] * self.gem_config.num_env,
+            vec_kwargs=[
+                {"seed": self.gem_config.get("seed", 233) + j} 
+                for j in range(self.gem_config.num_env)
+            ],
+            wrappers=wrappers,
+            async_mode=self.gem_config.get("async_env", False),
+        )
+        
+        logging.info(f"Initialized GEM environment: {self.gem_config.env_id}")
+    
+    def extract_action(self, text: str, prompt_template: str, model_path: str = "") -> str:
+        """
+        Extract and format the actual action from the model's output.
+        
+        This method handles different template formats and ensures the action
+        is properly formatted for the environment.
+        """
+        if not text:
+            return ""
+        
+        try:
+            formatted_action = None
+            if prompt_template in ["qwen3_game", "qwen3_general"] or (
+                prompt_template == "no" and "qwen" in model_path.lower()
+            ):
+                formatted_action = extract_last_boxed_answer(text)
+                if formatted_action is None:
+                    formatted_action = text.strip()
+            elif prompt_template == "code":
+                code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
+                if not code_blocks:
+                    formatted_action = None
+                else:
+                    formatted_action = code_blocks[-1].strip()
+            else:
+                # Default: use text as-is
+                formatted_action = text.strip()
+            
+            if formatted_action is None:
+                formatted_action = INVALID_ACTION
+            
+            return formatted_action
+            
+        except Exception as e:
+            logging.error(f"Error in extract_action: {e}")
+            return INVALID_ACTION
+    
+    def format_observation(self, observation: str, prompt_template: str, apply_chat_template: bool) -> str:
+        """Format observation using the specified template."""
+        formatted_obs = TEMPLATE_FACTORY.get(prompt_template, apply_no_template)(observation)
+        
+        if apply_chat_template:
+            formatted_obs = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": formatted_obs}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        
+        return formatted_obs
 
 class GEMRollout(Rollout):
     """
@@ -158,7 +314,7 @@ class GEMRollout(Rollout):
                 "env_idx": env_idx,
             }
             
-        except Exception as e:
+        except Exception:
             return INVALID_ACTION, {
                 "formatted_observation": formatted_obs,
                 "prompt_ids": prompt_ids,
@@ -171,24 +327,27 @@ class GEMRollout(Rollout):
                 "env_idx": env_idx,
             }
     
-    async def collect_gem_episodes_async(self, min_steps: int, train: bool) -> Tuple[List, dict]:
+    async def rollout(self, min_steps: int, train: bool) -> Tuple[List, dict]:
         """
-        Collect episodes from GEM environments with proper parallel async generation.
+        Collect episodes from GEM environments and return training-ready tensor dicts.
         
         This method handles vectorized environments by generating actions for ALL
-        environment observations in parallel using async/await.
+        environment observations in parallel using async/await, and directly converts
+        the collected data into training-ready format like rollout.py.
         
         Args:
             min_steps: Minimum number of transition steps to collect
             train: Whether this is training or evaluation
             
         Returns:
-            Tuple of (finished_episodes, collection_info)
+            Tuple of (tensor_dicts_list, collection_info)
+            - tensor_dicts_list: List of lists of tensor dicts ready for training
+            - collection_info: Dictionary containing collection statistics
         """
         # Reset all environments
         obs, _ = self.gem_env_manager.env.reset()
         episodes = [[] for _ in range(self.num_envs)]
-        finished_episodes = []
+        all_tensor_dicts = []  # Store lists of tensor dicts like rollout.py
         metrics = defaultdict(list)
         num_generation_failed = 0
         step_count = 0
@@ -228,7 +387,7 @@ class GEMRollout(Rollout):
                 else:
                     num_generation_failed += 1
                         
-            next_obs, rewards, terminated, truncated, info = self.gem_env_manager.env.step(actions)
+            next_obs, rewards, terminated, truncated, _ = self.gem_env_manager.env.step(actions)
             done = terminated | truncated
             
             # Process transitions for each environment
@@ -243,7 +402,10 @@ class GEMRollout(Rollout):
                         # Add reward to last transition and mark episode as done
                         episodes[i][-1].reward += rewards[i]
                         episodes[i][-1].done = True
-                        finished_episodes.append(deepcopy(episodes[i]))
+                        # Convert episode to tensor dicts and add to results
+                        tensor_dicts = self._convert_episode_to_tensor_dicts(episodes[i])
+                        if tensor_dicts:
+                            all_tensor_dicts.append(tensor_dicts)
                         episodes_completed_this_step += 1
                     episodes[i].clear()
                     episodes_reset_this_step += 1
@@ -269,8 +431,10 @@ class GEMRollout(Rollout):
                     episodes[i].append(transition)
                     
                     if done[i]:
-                        # Episode finished - collect it
-                        finished_episodes.append(deepcopy(episodes[i]))
+                        # Episode finished - convert to tensor dicts
+                        tensor_dicts = self._convert_episode_to_tensor_dicts(episodes[i])
+                        if tensor_dicts:
+                            all_tensor_dicts.append(tensor_dicts)
                         episodes_completed_this_step += 1
                         
                         metrics["episode_return"].append(sum(t.reward for t in episodes[i]))
@@ -284,14 +448,14 @@ class GEMRollout(Rollout):
             obs = next_obs
             
             # Check if we've collected enough transitions
-            total_transitions = sum(len(ep) for ep in finished_episodes)
+            total_transitions = sum(len(tensor_dicts) for tensor_dicts in all_tensor_dicts)
             if total_transitions >= min_steps:
                 break
         
         # Compute collection statistics
         collection_info = {
             "num_generation_failed": num_generation_failed,
-            "num_episodes": len(finished_episodes),
+            "num_episodes": len(all_tensor_dicts),
             "mean_episode_return": sum(metrics["episode_return"]) / len(metrics["episode_return"]) if metrics["episode_return"] else 0,
             "mean_episode_length": sum(metrics["episode_length"]) / len(metrics["episode_length"]) if metrics["episode_length"] else 0,
             "mean_episode_success": sum(metrics["episode_success"]) / len(metrics["episode_success"]) if metrics["episode_success"] else 0,
@@ -299,96 +463,77 @@ class GEMRollout(Rollout):
             "length_clip_ratio": sum(metrics["length_clip_ratio"]) / len(metrics["length_clip_ratio"]) if metrics["length_clip_ratio"] else 0,
         }
         
-        return finished_episodes, collection_info
+        return all_tensor_dicts, collection_info
     
-    def prepare_data_for_training(self, finished_episodes: List) -> List[dict]:
+    def _convert_episode_to_tensor_dicts(self, episode: List) -> List[dict]:
         """
-        Convert GEM episodes to RL2 training format.
+        Convert a single GEM episode to a list of tensor dicts ready for training.
         
-        This carefully prepares data to match RL2's expected format:
-        - states: input token IDs (all but last token)
-        - actions: output token IDs (all but first token) 
-        - action_mask: mask for assistant responses
-        - position_ids: position indices
-        - rewards: dense rewards (zeros except last token)
-        - eos_mask: end of sequence mask
-        - advantages: computed later by PPO trainer
+        This method takes the logic from prepare_data_for_training and applies it
+        to a single episode to directly create training-ready tensor dictionaries.
         
         Args:
-            finished_episodes: List of completed episodes
+            episode: List of GEMTransition objects for one episode
             
         Returns:
-            List of data dictionaries for RL2 training
+            List of tensor dictionaries ready for RL2 training
         """
-        data_list = []
-        
-        # Process each episode
-        for episode in finished_episodes:
-            # Compute returns for the episode
-            rewards = [t.reward for t in episode]
-            gamma = self.config.gem_env.get("gamma", 1.0)
+        if not episode:
+            return []
             
-            returns = [0.0] * len(rewards)
-            cur = 0.0
-            for i in reversed(range(len(rewards))):
-                cur = rewards[i] + gamma * cur
-                returns[i] = cur
+        tensor_dicts = []
+        
+        # Compute returns for the episode
+        rewards = [t.reward for t in episode]
+        gamma = self.config.gem_env.get("gamma", 1.0)
+        
+        returns = [0.0] * len(rewards)
+        cur = 0.0
+        for i in reversed(range(len(rewards))):
+            cur = rewards[i] + gamma * cur
+            returns[i] = cur
+        
+        # Process each transition in the episode
+        for i, transition in enumerate(episode):
+            # Skip if no response was generated
+            if not transition.response_ids:
+                continue
             
-            # Process each transition in the episode
-            for i, transition in enumerate(episode):
-                # Skip if no response was generated
-                if not transition.response_ids:
-                    continue
-                
-                states = transition.prompt_ids + transition.response_ids
-                actions = len(transition.prompt_ids) * [0] + transition.response_ids
-                action_mask = len(transition.prompt_ids) * [0] + len(transition.response_ids) * [1]
-                ex = get_tensor_dict(states, actions, action_mask)
-                
-                # Add reward information
-                # RL2 expects dense rewards - zeros for all tokens except the last
-                num_tokens = ex["action_mask"].shape[0]
-                dense_rewards = torch.zeros(num_tokens, dtype=torch.float32)
-                
-                # Find last action token (where action_mask is 1)
-                last_action_idx = -1
-                action_token_count = ex["action_mask"].sum().item()
-                for j in reversed(range(num_tokens)):
-                    if ex["action_mask"][j] == 1:
-                        last_action_idx = j
-                        break
-                        
-                
-                if last_action_idx >= 0:
-                    # Assign the discounted return to the last action token
-                    dense_rewards[last_action_idx] = returns[i]
-                else:
-                    pass
-                
-                # Add reward and EOS mask
-                ex["rewards"] = dense_rewards
-                
-                # EOS mask marks the end of sequences
-                eos_mask = torch.zeros(num_tokens, dtype=torch.long)
-                if last_action_idx >= 0:
-                    eos_mask[last_action_idx] = 1
-                ex["eos_mask"] = eos_mask
-                ex["llm_logps"] = torch.FloatTensor(transition.llm_logps[1:])
-                
-                assert ex["llm_logps"].shape[0] == ex["action_mask"].shape[0]
-                data_list.append(ex)
+            states = transition.prompt_ids + transition.response_ids
+            actions = len(transition.prompt_ids) * [0] + transition.response_ids
+            action_mask = len(transition.prompt_ids) * [0] + len(transition.response_ids) * [1]
+            ex = get_tensor_dict(states, actions, action_mask)
+            
+            # Add reward information
+            # RL2 expects dense rewards - zeros for all tokens except the last
+            num_tokens = ex["action_mask"].shape[0]
+            dense_rewards = torch.zeros(num_tokens, dtype=torch.float32)
+            
+            # Find last action token (where action_mask is 1)
+            last_action_idx = -1
+            for j in reversed(range(num_tokens)):
+                if ex["action_mask"][j] == 1:
+                    last_action_idx = j
+                    break
+                    
+            if last_action_idx >= 0:
+                # Assign the discounted return to the last action token
+                dense_rewards[last_action_idx] = returns[i]
+            
+            # Add reward and EOS mask
+            ex["rewards"] = dense_rewards
+            
+            # EOS mask marks the end of sequences
+            eos_mask = torch.zeros(num_tokens, dtype=torch.long)
+            if last_action_idx >= 0:
+                eos_mask[last_action_idx] = 1
+            ex["eos_mask"] = eos_mask
+            ex["llm_logps"] = torch.FloatTensor(transition.llm_logps[1:])
+            
+            assert ex["llm_logps"].shape[0] == ex["action_mask"].shape[0]
+            tensor_dicts.append(ex)
         
-        # Subsample if we have too many trajectories.
-        rollout_batch_size = self.config.gem_env.get("rollout_batch_size", len(data_list))
-        if len(data_list) > rollout_batch_size:
-            import random
-            data_list = random.sample(data_list, rollout_batch_size)
-        
-        # Validate data format
-        if data_list:
-            example = data_list[0]
-        
-        return data_list
+        return tensor_dicts
     
     @time_logger("gem_rollout")
     def __call__(self, data_list, train: bool, step: int):
@@ -414,10 +559,10 @@ class GEMRollout(Rollout):
             rollout_batch_size = self.config.gem_env.get("rollout_batch_size", 128)
             
             
-            # Run async episode collection
+            # Run async episode collection - now returns tensor dicts directly
             loop = asyncio.get_event_loop()
-            finished_episodes, collection_info = loop.run_until_complete(
-                self.collect_gem_episodes_async(rollout_batch_size, train)
+            all_tensor_dicts, collection_info = loop.run_until_complete(
+                self.rollout(rollout_batch_size, train)
             )
             
             # Release memory after training generation
@@ -436,16 +581,16 @@ class GEMRollout(Rollout):
             if not train:
                 return None
             
-            # Convert episodes to training data
-            data_list = self.prepare_data_for_training(finished_episodes)
-            
-            # Gather data across distributed processes
-            data_list = gather_and_concat_list(data_list, self.device_mesh["dp"])
+            # Data is already prepared for training by collect_gem_episodes_async
+            # Just gather across distributed processes
+            all_tensor_dicts = gather_and_concat_list(all_tensor_dicts, self.device_mesh["dp"])
             
             if dist.get_rank() == 0:
-                tensor_dict = pack_tensor_dicts(data_list)
+                # Flatten the list of tensor dict lists to a single list
+                tensor_dicts = sum(all_tensor_dicts, [])
+                tensor_dict = pack_tensor_dicts(tensor_dicts)
                 seqs = torch.LongTensor([
-                    len(data_list) for data_list in data_list
+                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
                 ])
                 cu_seqs = torch.cumsum(
                     torch.cat((torch.LongTensor([0]), seqs)), dim=0

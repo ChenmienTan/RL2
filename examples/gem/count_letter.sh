@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # GEM Environment PPO Training Example for RL2
+# Uses configuration-driven rollout class selection
 # Aligned with VeRL training configuration (only matching parameters)
 
 # Configuration variables
@@ -40,7 +41,7 @@ torchrun \
     adv.norm_var=true \
     adv.global_norm=true \
     \
-    rollout.use_gem_env=true \
+    rollout.rollout_class=RL2.workers.gem_rollout.GEMRollout \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
     rollout.tp_size=1 \
     rollout.train_sampling_params.max_new_tokens=8192 \

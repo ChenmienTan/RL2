@@ -41,6 +41,7 @@ actor:
     coef: 0.0
 
 rollout:
+  rollout_class: null  # Default: uses RL2.workers.rollout.Rollout
   model_name: ${actor.model_name}
   dtype: bfloat16
   tp_size: 1
@@ -55,7 +56,6 @@ rollout:
   max_turns: 1
   env_path: null
   dynamic_filtering: true
-  use_gem_env: false  # Set to true to enable GEM environment integration
   base_port: 30000
 
 ref_actor:
