@@ -1,6 +1,5 @@
 data:
   path: null
-  apply_chat_template: true
   max_length: null
   batch_size: 128
 

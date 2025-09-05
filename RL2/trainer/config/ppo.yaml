@@ -1,13 +1,11 @@
 train_data:
   path: null
-  apply_chat_template: true
   prompts_per_rollout: null
   responses_per_prompt: null
 
 test_data:
   path: null
-  apply_chat_template: true
-  response_per_rollout: 1
+  response_per_prompt: 1
   
 actor:
   model_name: null
@@ -21,7 +19,7 @@ actor:
   temperature: ${rollout.train_sampling_params.temperature}
   update_per_rollout: 1
   clip: 0.2
-  agg_mode: all_token_mean
+  avg_level: token
   lr: 1e-6
   weight_decay: 1e-2
   max_grad_norm: 1.0
@@ -46,9 +44,8 @@ rollout:
   model_name: ${actor.model_name}
   dtype: bfloat16
   tp_size: 1
-  gpu_memory_utilization: 0.5
+  gpu_memory_utilization: 0.7
   responses_per_prompt: ${train_data.responses_per_prompt}
-  apply_chat_template: true
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: null
@@ -103,7 +100,7 @@ critic:
   max_inference_length_per_device: ${critic.max_length_per_device}
   update_per_rollout: 12
   clip: 0.5
-  agg_mode: ${actor.agg_mode}
+  avg_level: ${actor.avg_level}
   lr: 5e-6
   weight_decay: ${actor.weight_decay}
   max_grad_norm: ${actor.max_grad_norm}

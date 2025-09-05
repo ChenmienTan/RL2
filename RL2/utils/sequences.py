@@ -10,29 +10,8 @@ from RL2.utils.comm import (
     gather_and_concat_list
 )
 
-def pad_tensor_dict_to_multiple_of(tensor_dict, multiple_of):
-
-    if len(tensor_dict["states"]) % multiple_of == 0:
-        return tensor_dict
-    pad_tokens = multiple_of - len(tensor_dict["states"]) % multiple_of
-    tensor_dict = {
-        k: torch.cat((
-            v,
-            torch.zeros((pad_tokens), dtype=v.dtype)
-        ))
-        for k, v in tensor_dict.items()
-    }
-    tensor_dict["position_ids"] = torch.arange(len(tensor_dict["states"]))
-    return tensor_dict
-
-def pack_tensor_dicts_to_minibatch(tensor_dicts):
-    return {
-        k: torch.cat([td[k] for td in tensor_dicts])
-        for k in tensor_dicts[0].keys()
-    }
-
-def pack_tensor_dicts_to_minibatches(
-    worker, tensor_dicts, pair=False
+def _tensor_dict_to_minibatches(
+    worker, tensor_dict, pair: bool
 ):
 
     # We pack sequences into minibatches for higher throughput.
@@ -47,7 +26,7 @@ def pack_tensor_dicts_to_minibatches(
     # check whether the first constraint is satisfied. If not, we increase 
     # `n_minibatches` by dp size (so that the second constraint is always 
     # satisfied) and repeat the loop.
-    seq_len_list = [len(td["states"]) for td in tensor_dicts]
+    seq_len_list = (tensor_dict["eos_mask"].argmax(-1) + 1).tolist()
     if pair:
         # When pair, every two adjacent sequences will be colocated, so 
         # their length are summed.
@@ -72,18 +51,21 @@ def pack_tensor_dicts_to_minibatches(
 
         global PAD_SEQUENCES
         if n_minibatches > len(seq_len_list):
-            # We pack sequences into `n_minibatches` minibatches, where the
-            # number of sequences must be no less than `n_minibatches`. If 
-            # not, we pad the number of sequences to `n_minibatches`.
+            # The number of sequences must be no less than `n_minibatches`.
+            # If not, we pad the number of sequences to `n_minibatches`.
             PAD_SEQUENCES = n_minibatches - len(seq_len_list)
-            sequence_length = 2 * worker.device_mesh["sp"].size()
-            sequence = {
-                k: torch.arange(sequence_length) if k == "position_ids"
-                else torch.zeros((sequence_length), dtype=v.dtype)
-                for k, v in tensor_dicts[0].items()
-            }
-            tensor_dicts.extend(PAD_SEQUENCES * [sequence])
-            seq_len_list.extend(PAD_SEQUENCES * [sequence_length])
+            for k, v in tensor_dict.items():
+                tensor_dict[k] = torch.cat((
+                    v,
+                    torch.zeros(
+                        (
+                            (2 if pair else 1) * PAD_SEQUENCES,
+                            v.shape[-1]
+                        ),
+                        dtype=v.dtype
+                    )
+                ))
+            seq_len_list.extend(PAD_SEQUENCES * [0])
         else:
             PAD_SEQUENCES = 0
 
@@ -107,52 +89,42 @@ def pack_tensor_dicts_to_minibatches(
     SHUFFLE_INDICES = sum(partitions, [])
 
     return [
-        pack_tensor_dicts_to_minibatch([
-            tensor_dicts[p] for p in partition
-        ])
+        {
+            k: v[partition] for k, v in tensor_dict.items()
+        }
         for partition in partitions
     ]
 
-def scatter_and_pack_tensor_dicts(
-    worker, tensor_dicts, pack_minibatches=False, pair=False
+def tensor_dict_to_minibatches(
+    worker, tensor_dict, pack_minibatches: bool, pair: bool
 ):
 
     if pack_minibatches:
         # Pack minibatches into multiple batches, where each batch is 
         # used for an update.
         if dist.get_rank() == 0:
-            assert len(tensor_dicts) >= worker.config.update_per_rollout, \
-                f"The number of sequences {len(tensor_dicts)} is less than the number of updates {worker.config.update_per_rollout}."
-            bsz = math.ceil(
-                len(tensor_dicts) / worker.config.update_per_rollout
-            )
             return [
-                scatter_and_pack_tensor_dicts(
-                    worker, tensor_dicts[update * bsz:(update + 1) * bsz]
+                tensor_dict_to_minibatches(
+                    worker, {
+                        k: torch.chunk(
+                            v, worker.config.update_per_rollout, dim=0
+                        )[update]
+                        for k, v in tensor_dict.items()
+                    }, False, pair
                 )
                 for update in range(worker.config.update_per_rollout)
             ]
         else:
             return [
-                scatter_and_pack_tensor_dicts(worker, None)
+                tensor_dict_to_minibatches(worker, None, False, pair)
                 for _ in range(worker.config.update_per_rollout)
             ]
 
     if worker.device_mesh["tp"].get_local_rank() == 0:
         if worker.device_mesh["sp"].get_local_rank() == 0:
             if worker.device_mesh["dp"].get_local_rank() == 0:
-                # We use ZigZag Ring Attention to partition sequences, where 
-                # the length of each sequence needs to be multiple of 2 * 
-                # sp size and each rank sequentially get the head and tail.
-                # See https://zhuanlan.zhihu.com/p/683714620.
-                tensor_dicts = [
-                    pad_tensor_dict_to_multiple_of(
-                        td, 2 * worker.device_mesh["sp"].size()
-                    )
-                    for td in tensor_dicts
-                ]
-                minibatches = pack_tensor_dicts_to_minibatches(
-                    worker, tensor_dicts, pair
+                minibatches = _tensor_dict_to_minibatches(
+                    worker, tensor_dict, pair
                 )
             minibatches = split_and_scatter_list(
                 minibatches
@@ -180,69 +152,55 @@ def scatter_and_pack_tensor_dicts(
         for minibatch in minibatches
     ]
 
-def position_ids_to_cu_seqlens(position_ids):
-
-    indices = torch.arange(
-        len(position_ids),
-        dtype=torch.int32,
-        device=position_ids.device
-    )
-    return torch.cat((
-        indices[position_ids == 0],
-        torch.tensor(
-            position_ids.size(),
-            dtype=torch.int32,
-            device=position_ids.device
-        )
-    ))
-
-def split_minibatches_into_tensor_dicts(minibatches):
+def minibatches_to_tensor_dict(worker, minibatches):
     
-    tensor_dicts = []
-    for minibatch in minibatches:
-        cu_seqlens = position_ids_to_cu_seqlens(
-            minibatch["position_ids"]
-        )
-        for start_idx, end_idx in zip(
-            cu_seqlens[:-1], cu_seqlens[1:]
-        ):
-            tensor_dicts.append({
-                k: v[start_idx:end_idx].to("cpu")
-                for k, v in minibatch.items()
-            })
-        
-    return tensor_dicts
-
-def resume_order_of_tensor_dicts(raw_tensor_dicts):
-
-    tensor_dicts = len(raw_tensor_dicts) * [None]
-    for idx, td in zip(SHUFFLE_INDICES, raw_tensor_dicts):
-        tensor_dicts[idx] = td
-    if PAD_SEQUENCES > 0:
-        tensor_dicts = tensor_dicts[:-PAD_SEQUENCES]
-    return tensor_dicts
-
-def unpack_and_gather_tensor_dicts(worker, minibatches):
-        
-    tensor_dicts = split_minibatches_into_tensor_dicts(minibatches)
-    tensor_dicts = gather_and_concat_list(
-        tensor_dicts, worker.device_mesh["dp"]
+    minibatches = [
+        {
+            k: v.to("cpu")
+            for k, v in minibatch.items()
+        }
+        for minibatch in minibatches
+    ]
+    minibatches = gather_and_concat_list(
+        minibatches, worker.device_mesh["dp"]
     )
     if dist.get_rank() == 0:
-        return resume_order_of_tensor_dicts(tensor_dicts)
+
+        tensor_dict = {
+            k: torch.cat([
+                minibatch[k] for minibatch in minibatches
+            ])
+            for k in minibatches[0].keys()
+        }
+
+        reversed_indices = len(SHUFFLE_INDICES) * [None]
+        for idx, shuffle_idx in enumerate(SHUFFLE_INDICES):
+            reversed_indices[shuffle_idx] = idx
+        tensor_dict = {
+            k: v[reversed_indices]
+            for k, v in tensor_dict.items()
+        }
+
+        if PAD_SEQUENCES > 0:
+            tensor_dict = {
+                k: v[:-PAD_SEQUENCES]
+                for k, v in tensor_dict.items()
+            }
+
+        return tensor_dict
 
 def data_manager(pack_minibatches=False, pair=False, gather=False):
     def decorator(func):
         @functools.wraps(func)
         def func_with_data_scatter_and_gather(
-            worker, tensor_dicts, *args, **kwargs
+            worker, tensor_dict, *args, **kwargs
         ):
-            minibatches = scatter_and_pack_tensor_dicts(
-                worker, tensor_dicts, pack_minibatches, pair
+            minibatches = tensor_dict_to_minibatches(
+                worker, tensor_dict, pack_minibatches, pair
             )
             output = func(worker, minibatches, *args, **kwargs)
             if gather:
-                output = unpack_and_gather_tensor_dicts(worker, output)
+                output = minibatches_to_tensor_dict(worker, output)
             return output
         return func_with_data_scatter_and_gather
     return decorator
