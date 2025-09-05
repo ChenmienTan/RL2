@@ -2,27 +2,6 @@ import re
 import string
 import aiohttp
 
-async def step(texts):
-
-    match = re.search(
-        r"<(search|answer)>(.*?)</\1>", texts[-1], re.DOTALL
-    )
-    if match is None:
-        return "\nMy previous action is invalid. \
-            If I want to search, I should put the query between <search> and </search>. \
-            If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n"
-    elif match.group(1) == "answer":
-        return ""
-    
-    query = match.group(2)
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "http://localhost:8000/search",
-            json={"query": query}
-        ) as response:
-            result = await response.json()
-    return f"\n\n<information>{result.strip()}</information>\n\n"
-
 def normalize_answer(s):
 
     def remove_articles(text):
@@ -40,17 +19,35 @@ def normalize_answer(s):
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
-def reward_fn(texts, answer):
+async def step(state, action, answer):
 
-    preds = re.findall(
-        r"<answer>(.*?)</answer>", texts[-1], re.DOTALL
+    match = re.search(
+        r"<(search|answer)>(.*?)</\1>", action, re.DOTALL
     )
-    if len(preds) == 0:
-        return False
-    pred = normalize_answer(preds[-1].strip())
+    if match is None:
+        next_state = state + action + "\nMy previous action is invalid. \
+If I want to search, I should put the query between <search> and </search>. \
+If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n"
+        return next_state, False, False
+    elif match.group(1) == "search":
+        query = match.group(2).strip()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "http://localhost:8000/search",
+                json={"query": query}
+            ) as response:
+                passage = (await response.json())["passage"].strip()
+        next_state = state + action + f"\n\n<information>{passage}</information>\n\n"
+        return next_state, False, False
+    else:
+        preds = re.findall(
+            r"<answer>(.*?)</answer>", action, re.DOTALL
+        )
+        pred = normalize_answer(preds[-1].strip())
 
-    if isinstance(answer, str):
-        answer = [answer]
-    answer = [normalize_answer(a) for a in answer]
-  
-    return pred in answer
+        if isinstance(answer, str):
+            answer = [answer]
+        answer = [normalize_answer(a) for a in answer]
+    
+        reward = pred in answer
+        return None, reward, True

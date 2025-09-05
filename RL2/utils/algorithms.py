@@ -1,5 +1,6 @@
+import functools
 import torch
-from torch.nn.utils.rnn import pad_sequence
+from RL2.datasets import pack_tensor_dicts
 
 def compute_approx_kl(
     logps: torch.Tensor,
@@ -19,31 +20,52 @@ def compute_approx_kl(
     else:
         raise NotImplementedError
 
-def compute_gae(tensor_dict, gamma, lamda):
+def action_extractor(func):
 
-    # extract rewards and values of action tokens
-    rewards, values, action_masks = [], [], []
-    for reward, value, action_mask in zip(
-        tensor_dict["rewards"],
-        tensor_dict["values"],
-        tensor_dict["action_mask"]
+    @functools.wraps(func)
+    def compute_adv_with_action_extraction(
+        raw_tensor_dict, cu_seqs, *args, **kwargs
     ):
-        indices = torch.where(action_mask)[0]
-        rewards.append(reward[indices])
-        values.append(value[indices])
-        action_masks.append(action_mask[indices])
+        
+        def _extract_actions(tensor_dict):
 
-    # pad to identical length for efficient computation
-    rewards = pad_sequence(rewards, True)
-    values = pad_sequence(values, True)
-    action_masks = pad_sequence(action_masks, True)
+            indices = torch.where(tensor_dict["action_mask"])
+            return {
+                k: v[indices]
+                for k, v in tensor_dict.items()
+            }
+        
+        tensor_dict = pack_tensor_dicts([
+            _extract_actions(
+                {
+                    k: v[start_idx:end_idx]
+                    for k, v in raw_tensor_dict.items()
+                }
+            )
+            for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
+        ])
+
+        tensor_dict_delta = func(tensor_dict, *args, **kwargs)
+        
+        for k, v in tensor_dict_delta.items():
+            raw_tensor_dict[k] = torch.zeros(raw_tensor_dict["states"].shape)
+            for idx, (start_idx, end_idx) in enumerate(
+                zip(cu_seqs[:-1], cu_seqs[1:])
+            ):
+                indices = torch.where(raw_tensor_dict["action_mask"][start_idx:end_idx])
+                raw_tensor_dict[k][start_idx:end_idx][indices] = v[idx][:len(indices[0])]
+    
+    return compute_adv_with_action_extraction
+
+@action_extractor
+def compute_gae(tensor_dict, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
     next_values = torch.cat((
-        values[:, 1:],
-        torch.zeros((values.shape[0], 1))
+        tensor_dict["values"][:, 1:],
+        torch.zeros((tensor_dict["values"].shape[0], 1))
     ), -1)
-    deltas = rewards + gamma * next_values - values
+    deltas = tensor_dict["rewards"] + gamma * next_values - tensor_dict["values"]
 
     # A_t = \delta_t + \gamma * \lambda * A_{t+1}
     gae, reversed_gaes = 0, []
@@ -51,26 +73,16 @@ def compute_gae(tensor_dict, gamma, lamda):
         gae = deltas[:, t] + gamma * lamda * gae
         reversed_gaes.append(gae)
     gaes = torch.stack(reversed_gaes[::-1], -1)
-    returns = gaes + values
+    returns = gaes + tensor_dict["values"]
 
-    action_gaes = gaes[torch.where(action_masks)]
-    gaes = (gaes - action_gaes.mean()) * action_masks / (
+    action_gaes = gaes[torch.where(tensor_dict["action_mask"])]
+    advantages = (gaes - action_gaes.mean()) * tensor_dict["action_mask"] / (
         action_gaes.std() + torch.finfo(gaes.dtype).eps
     )
 
-    tensor_dict["advantages"] = torch.zeros_like(tensor_dict["rewards"])
-    tensor_dict["returns"] = torch.zeros_like(tensor_dict["rewards"])
-    for advantage, ret, action_mask, gae, action_ret in zip(
-        tensor_dict["advantages"],
-        tensor_dict["returns"],
-        tensor_dict["action_mask"],
-        gaes,
-        returns
-    ):
-        indices = torch.where(action_mask)[0]
-        advantage[indices] = gae[:len(indices)]
-        ret[indices] = action_ret[:len(indices)]
+    return {"advantages": advantages, "returns": returns}
 
+@action_extractor
 def compute_reinforce_adv(
     tensor_dict,
     responses_per_prompt,
@@ -93,4 +105,5 @@ def compute_reinforce_adv(
             std + torch.finfo(advantages.dtype).eps
         )
 
-    tensor_dict["advantages"] = advantages.view(-1, 1) * tensor_dict["action_mask"]
+    advantages = advantages.view(-1, 1) * tensor_dict["action_mask"]
+    return {"advantages": advantages}

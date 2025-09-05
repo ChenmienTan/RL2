@@ -61,17 +61,19 @@ class PPOTrainer(Trainer):
         }, step=step)
     
     @time_logger("compute_advantages")
-    def compute_advantages(self, tensor_dict, step):
+    def compute_advantages(self, tensor_dict, cu_seqs, step):
 
         if self.config.adv.estimator == "gae":
             compute_gae(
                 tensor_dict,
+                cu_seqs,
                 self.config.adv.gamma,
                 self.config.adv.lamda
             )
         elif self.config.adv.estimator == "reinforce":
             compute_reinforce_adv(
                 tensor_dict,
+                cu_seqs,
                 self.config.train_data.responses_per_prompt,
                 self.config.adv.global_norm,
                 self.config.adv.norm_var
@@ -99,7 +101,7 @@ class PPOTrainer(Trainer):
             ):
                 step += 1
 
-                tensor_dict = self.rollout(data_list, True, step)
+                tensor_dict, cu_seqs = self.rollout(data_list, True, step)
 
                 if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
                     tensor_dict = self.actor.compute_logps(tensor_dict, step)
@@ -111,7 +113,7 @@ class PPOTrainer(Trainer):
                 if dist.get_rank() == 0:
                     if self.config.actor.kl.coef > 0:
                         self.compute_approx_kl(tensor_dict, step)
-                    self.compute_advantages(tensor_dict, step)
+                    self.compute_advantages(tensor_dict, cu_seqs, step)
 
                 state_dict = self.actor.update(tensor_dict, step)
                 if self.config.adv.estimator == "gae":

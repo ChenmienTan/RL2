@@ -1,6 +1,5 @@
 from omegaconf import OmegaConf
 import os
-import json
 import asyncio
 import importlib
 from collections import defaultdict
@@ -35,7 +34,7 @@ class Rollout(Worker):
                 tp_size=self.device_mesh["tp"].size(),
                 mem_fraction_static=config.gpu_memory_utilization,
                 enable_memory_saver=True,
-                port=30000 + dist.get_rank()
+                port=config.base_port + dist.get_rank()
             )
         
             self.train_sampling_params = OmegaConf.to_container(
@@ -85,68 +84,81 @@ class Rollout(Worker):
         )
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
+
+    def initialize_state_dict(self, state_text):
+
+        states = self.tokenizer.encode(state_text, add_special_tokens=False)
+        return {
+            "states": states,
+            "actions": len(states) * [0],
+            "action_mask": len(states) * [0],
+            "logps": len(states) * [0],
+            "rewards": len(states) * [0]
+        }
+    
+    def get_tensor_dict(self, state_dict):
+
+        tensor_dict = get_tensor_dict(
+            state_dict["states"],
+            state_dict["actions"],
+            state_dict["action_mask"]
+        )
+        tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
+        tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
+        return tensor_dict
         
     async def rollout(self, ex, train):
 
-        texts, answer = [ex["prompt"]], ex["answer"]
-
-        states = self.tokenizer.encode(ex["prompt"], add_special_tokens=False)
-        actions = len(states) * [0]
-        action_mask = len(states) * [0]
-        logps = len(states) * [0]
-
+        state_text = ex["prompt"]
+        state_dict = self.initialize_state_dict(state_text)
+        tensor_dicts = []
         metric = defaultdict(list)
-        for turn in range(self.config.max_turns):
+        for turn in range(1, self.config.max_turns + 1):
 
             response = await self.llm.async_generate(
-                input_ids=states,
+                input_ids=state_dict["states"],
                 sampling_params=self.train_sampling_params
                 if train else self.test_sampling_params,
                 return_logprob=True
             )
 
-            texts.append(response["text"])
+            action_text = response["text"]
+            next_state_text, reward, done = await self.env.step(
+                state_text, action_text, ex["answer"]
+            )
 
             meta_info = response["meta_info"]
-            logp, state, _ = map(list, zip(*meta_info["output_token_logprobs"]))
-            states.extend(state)
-            actions.extend(state)
-            action_mask.extend(len(state) * [1])
-            logps.extend(logp)
-
+            logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+            state_dict["states"].extend(action)
+            state_dict["actions"].extend(action)
+            state_dict["action_mask"].extend(len(action) * [1])
+            state_dict["logps"].extend(logp)
+            state_dict["rewards"].extend((len(action) - 1) * [0] + [reward])
             metric["response_length"].append(meta_info["completion_tokens"])
             metric["length_clip_ratio"].append(
                 meta_info["finish_reason"]["type"] == "length"
             )
 
-            # Do not invoke tools in the last turn.
-            if turn + 1 == self.config.max_turns:
+            if turn == self.config.max_turns or done:
+                tensor_dicts.append(self.get_tensor_dict(state_dict))
                 break
+            if next_state_text.startswith(state_text + action_text):
+                state_dict_delta = self.initialize_state_dict(
+                    next_state_text[len(state_text + action_text):]
+                )
+                for k, v in state_dict_delta.items():
+                    state_dict[k].extend(v)
+            else:
+                tensor_dicts.append(self.get_tensor_dict(state_dict))
+                state_dict = self.initialize_state_dict(next_state_text)
+            state_text = next_state_text
 
-            env_response = await self.env.step(texts)
-            # Terminate if no tool is invoked.
-            if len(env_response) == 0:
-                break
+        metric["n_turns"].append(turn)
+        metric["rewards"].append(
+            sum([td["rewards"].sum().item() for td in tensor_dicts])
+        )
 
-            texts.append(env_response)
-
-            state = self.tokenizer.encode(env_response, add_special_tokens=False)
-            states.extend(state)
-            actions.extend(len(state) * [0])
-            action_mask.extend(len(state) * [0])
-            logps.extend(len(state) * [0])
-
-        reward = self.env.reward_fn(texts, answer)
-
-        td = get_tensor_dict(states, actions, action_mask)
-        td["rewards"] = torch.FloatTensor((len(states) - 2) * [0] + [reward])
-        td["llm_logps"] = torch.FloatTensor(logps[1:])
-
-        metric["n_turns"].append(turn + 1)
-        metric["rewards"].append(reward)
-        metric["sequence_length"].append(len(td["states"]))
-
-        return td, texts, metric
+        return tensor_dicts, metric
 
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
@@ -178,10 +190,7 @@ class Rollout(Worker):
 
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            tensor_dicts, all_texts, metrics = map(list, zip(*outputs))
-            
-            if dist.get_rank() == 0:
-                tqdm.write(json.dumps(all_texts[0], indent=4))
+            all_tensor_dicts, metrics = map(list, zip(*outputs))
 
             suffix = "train" if train else "test"
             metrics = {
@@ -193,31 +202,41 @@ class Rollout(Worker):
             if not train:
                 return
 
-            tensor_dicts = gather_and_concat_list(
-                tensor_dicts, self.device_mesh["dp"]
+            all_tensor_dicts = gather_and_concat_list(
+                all_tensor_dicts, self.device_mesh["dp"]
             )
 
             if dist.get_rank() == 0:
 
-                tensor_dict = pack_tensor_dicts(tensor_dicts)
-                if not self.config.dynamic_filtering:
-                    return tensor_dict
+                if self.config.dynamic_filtering:
 
-                group_size = self.config.responses_per_prompt
-                rewards = tensor_dict["rewards"].sum(-1).view(-1, group_size)
-                are_filtered = rewards.std(-1) == 0
-                wandb.log({
-                    "dynamic_filtering_ratio": are_filtered.float().mean().item()
-                }, step=step)
-                return {
-                    k:(
-                        v
-                        .view(-1, group_size, v.shape[-1])
-                        [~are_filtered]
-                        .view(-1, v.shape[-1])
-                    )
-                    for k, v in tensor_dict.items()
-                }
+                    group_size = self.config.responses_per_prompt
+                    rewards = torch.FloatTensor([
+                        sum([td["rewards"].sum().item() for td in tensor_dicts])
+                        for tensor_dicts in all_tensor_dicts
+                    ]).view(-1, group_size)
+                    are_filtered = rewards.std(-1) == 0
+                    all_tensor_dicts = sum([
+                        all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
+                        for idx, is_filtered in enumerate(are_filtered)
+                        if not is_filtered
+                    ], [])
+                    wandb.log({
+                        "dynamic_filtering_ratio": are_filtered.float().mean().item()
+                    }, step=step)
+
+                tensor_dicts = sum(all_tensor_dicts, [])
+                tensor_dict = pack_tensor_dicts(tensor_dicts)
+                seqs = torch.LongTensor([
+                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
+                ])
+                cu_seqs = torch.cumsum(
+                    torch.cat((torch.LongTensor([0]), seqs)), dim=0
+                )
+                
+                return tensor_dict, cu_seqs
+
+        return None, None
         
     @time_logger("update_rollout")
     def update(self, state_dict, step):

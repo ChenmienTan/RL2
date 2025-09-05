@@ -44,7 +44,7 @@ rollout:
   model_name: ${actor.model_name}
   dtype: bfloat16
   tp_size: 1
-  gpu_memory_utilization: 0.7
+  gpu_memory_utilization: 0.6
   responses_per_prompt: ${train_data.responses_per_prompt}
   train_sampling_params:
     temperature: 1.0
@@ -56,29 +56,7 @@ rollout:
   env_path: null
   dynamic_filtering: true
   use_gem_env: false  # Set to true to enable GEM environment integration
-  
-  # Optional GEM environment configuration - only used when rollout.use_gem_env = true
-  gem_env:
-    env_id: "rg:leg_counting"  # GEM environment ID (e.g., "math:GSM8K", "code:PrimeIntellect15k")
-    wrappers: "concat_chat"    # GEM environment wrappers
-    num_env: 2                 # Number of parallel environments
-    async_env: true            # Use async vectorization for better performance
-    seed: 233                  # Random seed for environment
-    
-    # Prompt and response handling
-    prompt_template: "qwen3_game"  # Template for formatting observations ("qwen3_game", "no", "qwen3_general", "code")
-    apply_chat_template: false     # Whether to apply tokenizer chat template
-    max_model_len: 12800          # Maximum model context length
-    
-    # Episode collection settings
-    rollout_batch_size: 128       # Number of transitions to collect per rollout
-    keep_generation_failed: true  # Keep episodes where generation failed
-    
-    # Reward computation
-    gamma: 1.0                    # Discount factor for computing returns
-    
-    # Logging and debugging
-    dump_experience_every: -1     # Dump experience data every N steps (-1 to disable)
+  base_port: 30000
 
 ref_actor:
   model_name: ${actor.model_name}

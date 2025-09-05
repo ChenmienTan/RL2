@@ -126,11 +126,12 @@ class Actor(Worker):
                 clip_ratios = objective > clipped_objective
 
                 if self.config.tis_coef > 0:
-                    raw_tis = torch.exp(logps - minibatch["llm_logps"])
-                    tis = raw_tis.clamp(max=self.config.tis_coef)
-                    tis_clamp_ratio = (raw_tis > self.config.tis_coef).float()
+                    # https://fengyao.notion.site/off-policy-rl
+                    tis = torch.exp(
+                        logps.detach() - minibatch["llm_logps"]
+                    ).clamp(max=self.config.tis_coef)
                     losses *= tis
-
+                    
                 loss, clip_ratio, entropy = aggregate_values(
                     (losses, clip_ratios, entropy),
                     minibatch["action_mask"],
@@ -138,16 +139,6 @@ class Actor(Worker):
                     total_actions,
                     total_sequences
                 )
-                
-                if self.config.tis_coef > 0:
-                    raw_tis_agg, tis_agg, tis_clamp_ratio_agg = aggregate_values(
-                        (raw_tis, tis, tis_clamp_ratio),
-                        minibatch,
-                        self.config.avg_level,
-                        total_actions,
-                        total_sequences
-                    )
-
                 loss = loss - self.config.entropy.coef * entropy
                 if self.config.kl.coef > 0 and self.config.kl.type == "loss":
                     kl_loss = compute_approx_kl(
@@ -163,10 +154,6 @@ class Actor(Worker):
                 metric["actor/entropy"].append(entropy.item())
                 metric["actor/loss"].append(loss.item())
                 metric["actor/clip_ratio"].append(clip_ratio.item())
-                if self.config.tis_coef > 0:
-                    metric["actor/raw_tis"].append(raw_tis_agg.item())
-                    metric["actor/tis"].append(tis_agg.item())
-                    metric["actor/tis_clamp_ratio"].append(tis_clamp_ratio_agg.item())
 
             grad_norm = self.optimizer_step()
 
