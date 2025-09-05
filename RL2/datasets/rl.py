@@ -4,16 +4,15 @@ from RL2.datasets.base import BaseDataset
 
 class RLDataset(BaseDataset):
 
-    def __init__(self, config, tokenizer):
-        if config.path:
+    def __init__(self, config, tokenizer, custom_rollout=False):
+        if not custom_rollout:
             super().__init__(config, tokenizer)
         else:
-            self.dataset = []
+            self.dataset = [{'prompt': '', 'answer': ''}] * config.prompts_per_rollout
             self.tokenizer = tokenizer
+            self.config = config
 
     def __getitem__(self, idx):
-        if not self.dataset:
-            return {"prompt": "", "answer": ""}
 
         ex = self.dataset[idx]
         

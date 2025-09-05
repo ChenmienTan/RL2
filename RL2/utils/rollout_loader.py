@@ -68,3 +68,17 @@ def load_rollout_class(config):
         raise AttributeError(
             f"Class '{class_name}' not found in module '{module_path}': {e}"
         ) from e
+
+
+def uses_custom_rollout(config):
+    """
+    Check if using custom rollout class vs default dataset-based rollout.
+    
+    Args:
+        config: Rollout configuration object
+        
+    Returns:
+        bool: True if custom rollout class is specified, False otherwise
+    """
+    return (hasattr(config, 'rollout_class') and 
+            config.rollout_class is not None)
