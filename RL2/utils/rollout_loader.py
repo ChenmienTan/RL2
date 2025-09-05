@@ -8,17 +8,17 @@ rollout classes based on configuration, with built-in tracking of custom usage.
 import importlib
 import logging
 
-_IS_CUSTOM_ROLLOUT = False
+def is_custom_rollout(config):
+    return hasattr(config, 'rollout_class') and config.rollout_class is not None
 
 def Rollout(config):
-    if not hasattr(config, 'rollout_class') or config.rollout_class is None:
+    if not is_custom_rollout(config):
         from RL2.workers.rollout import Rollout
         return Rollout(config)
     
     return _create_rollout(config)
 
 def _create_rollout(config):
-    _IS_CUSTOM_ROLLOUT = True
     rollout_class_path = config.rollout_class
     
     if '.' not in rollout_class_path:
@@ -53,7 +53,3 @@ def _create_rollout(config):
         raise AttributeError(
             f"Class '{class_name}' not found in module '{module_path}': {e}"
         ) from e
-
-def is_custom_rollout():
-    global _IS_CUSTOM_ROLLOUT
-    return _IS_CUSTOM_ROLLOUT

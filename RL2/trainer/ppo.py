@@ -37,7 +37,7 @@ class PPOTrainer(Trainer):
             self.config.train_data
             if train else self.config.test_data,
             self.actor.tokenizer,
-            is_custom_rollout=is_custom_rollout()
+            is_custom_rollout=is_custom_rollout(self.config.rollout)
         )
 
         return get_dataloader(
