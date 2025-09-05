@@ -2,6 +2,7 @@ import os
 import datasets
 import torch
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 # TODO (P1): support concatnating multiple datasets
@@ -48,7 +49,7 @@ def get_tensor_dict(
 
     tensor_dict = {
         "states": torch.LongTensor(states),
-        "sos_mask": torch.LongTensor([1] + (len(states) - 1) * [0]),
+        "eos_mask": torch.LongTensor((len(states) - 1) * [0] + [1]),
         "position_ids": torch.arange(len(states))
     }
     if rm:
@@ -60,6 +61,15 @@ def get_tensor_dict(
         tensor_dict["action_mask"] = torch.LongTensor(action_mask)
 
     return tensor_dict
+
+def pack_tensor_dicts(tensor_dicts):
+    return {
+        k: pad_sequence(
+            [tensor_dict[k] for tensor_dict in tensor_dicts], True
+        )
+        for k in tensor_dicts[0].keys()
+    }
+
 
 class BaseDataset(Dataset):
     

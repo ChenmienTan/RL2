@@ -3,7 +3,7 @@ import torch
 from transformers import AutoModelForTokenClassification
 from RL2.workers import Worker
 from RL2.utils.sequences import data_manager, count_total
-from RL2.utils.ring_attn import ring_attn_manager
+from RL2.utils.sequence_parallelism import sequence_parallelism_manager
 from RL2.utils.functions import aggregate_values
 from RL2.utils.offloading import model_offloading_manager
 from RL2.utils.logging import (
@@ -28,7 +28,7 @@ class Critic(Worker):
 
         self.prepare_model_optimizer()
 
-    @ring_attn_manager
+    @sequence_parallelism_manager
     def forward(self, minibatch) -> torch.Tensor:
 
         return self.model(
@@ -64,7 +64,7 @@ class Critic(Worker):
 
             total_actions, total_sequences = count_total(
                 batch,
-                ("action_mask", "sos_mask"),
+                ("action_mask", "eos_mask"),
                 self.device_mesh["dp"]
             )
             metric = defaultdict(list)
@@ -83,8 +83,8 @@ class Critic(Worker):
 
                 loss, clip_ratio = aggregate_values(
                     (losses, clip_ratios),
-                    minibatch,
-                    self.config.agg_mode,
+                    minibatch["action_mask"],
+                    self.config.avg_level,
                     total_actions,
                     total_sequences
                 )

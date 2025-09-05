@@ -22,14 +22,16 @@ class RLDataset(BaseDataset):
             return {"messages": [], "answer": ""}
         
         ex = self.dataset[idx]
-        if self.config.apply_chat_template:
+        
+        if "prompt" in ex.keys():
+            prompt = ex["prompt"]
+        else:
             prompt = self.tokenizer.apply_chat_template(
                 ex["messages"],
                 add_generation_prompt=True,
                 tokenize=False
             )
-        else:
-            prompt = ex["prompt"]
+            
         answer = ex["answer"]
 
         return {

@@ -17,7 +17,7 @@ def update(worker, minibatches, step):
 
     total_actions, total_sequences = count_total(
         minibatches,
-        ("action_mask", "sos_mask"),
+        ("action_mask", "eos_mask"),
         worker.device_mesh["dp"]
     )
     metrics = defaultdict(list)
@@ -27,8 +27,8 @@ def update(worker, minibatches, step):
         logps = worker.forward(minibatch)
         loss = aggregate_values(
             - logps,
-            minibatch,
-            worker.config.agg_mode,
+            minibatch["action_mask"],
+            worker.config.avg_level,
             total_actions,
             total_sequences
         )
@@ -61,14 +61,14 @@ class SFTTrainer(Trainer):
             step // len(self.train_dataloader),
             self.config.trainer.n_epochs
         ):
-            for tensor_dicts in tqdm(
+            for tensor_dict in tqdm(
                 self.train_dataloader,
                 desc=f"Epoch {epoch + 1}",
                 disable=(dist.get_rank() != 0),
                 initial=step % len(self.train_dataloader)
             ):
                 step += 1
-                update(self.actor, tensor_dicts, step)
+                update(self.actor, tensor_dict, step)
                 save_ckpt(self, (self.actor,), step)
         save_model(self, self.actor)
 

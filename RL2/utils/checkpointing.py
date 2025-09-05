@@ -58,6 +58,8 @@ def load_ckpt(trainer, workers):
     checkpoint_id = trainer.config.trainer.load_ckpt_from
     if checkpoint_id == "latest":
         save_dirs = glob.glob(f"{trainer.config.trainer.save_dir}/step*")
+        if not save_dirs:
+            return 0
         checkpoint_id = max(
             save_dirs, key=lambda dir: int(dir.split("/step")[-1])
         )

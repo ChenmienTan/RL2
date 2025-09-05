@@ -1,5 +1,6 @@
 from omegaconf import OmegaConf
 import os
+import json
 import asyncio
 import importlib
 from collections import defaultdict
@@ -13,7 +14,7 @@ from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from tqdm.asyncio import tqdm
 import wandb
 from RL2.workers import Worker
-from RL2.datasets import get_tensor_dict
+from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
 
@@ -87,9 +88,9 @@ class Rollout(Worker):
         
     async def rollout(self, ex, train):
 
-        prompt, answer = ex["prompt"], ex["answer"]
+        texts, answer = [ex["prompt"]], ex["answer"]
 
-        states = self.tokenizer.encode(prompt, add_special_tokens=False)
+        states = self.tokenizer.encode(ex["prompt"], add_special_tokens=False)
         actions = len(states) * [0]
         action_mask = len(states) * [0]
         logps = len(states) * [0]
@@ -104,7 +105,7 @@ class Rollout(Worker):
                 return_logprob=True
             )
 
-            prompt += response["text"]
+            texts.append(response["text"])
 
             meta_info = response["meta_info"]
             logp, state, _ = map(list, zip(*meta_info["output_token_logprobs"]))
@@ -122,30 +123,30 @@ class Rollout(Worker):
             if turn + 1 == self.config.max_turns:
                 break
 
-            response = self.env.interact(prompt)
+            env_response = await self.env.step(texts)
             # Terminate if no tool is invoked.
-            if len(response) == 0:
+            if len(env_response) == 0:
                 break
 
-            prompt += response
+            texts.append(env_response)
 
-            state = self.tokenizer.encode(response, add_special_tokens=False)
+            state = self.tokenizer.encode(env_response, add_special_tokens=False)
             states.extend(state)
             actions.extend(len(state) * [0])
             action_mask.extend(len(state) * [0])
             logps.extend(len(state) * [0])
 
-        reward = self.env.reward_fn(prompt, answer)
+        reward = self.env.reward_fn(texts, answer)
 
         td = get_tensor_dict(states, actions, action_mask)
-        td["rewards"] = torch.FloatTensor((len(states) - 1) * [0] + [reward])
+        td["rewards"] = torch.FloatTensor((len(states) - 2) * [0] + [reward])
         td["llm_logps"] = torch.FloatTensor(logps[1:])
 
         metric["n_turns"].append(turn + 1)
         metric["rewards"].append(reward)
         metric["sequence_length"].append(len(td["states"]))
 
-        return td, prompt, metric
+        return td, texts, metric
 
     @time_logger("rollout")
     def __call__(self, data_list, train: bool, step: int):
@@ -177,10 +178,10 @@ class Rollout(Worker):
 
         if self.device_mesh["tp"].get_local_rank() == 0:
 
-            tensor_dicts, prompts, metrics = map(list, zip(*outputs))
-
+            tensor_dicts, all_texts, metrics = map(list, zip(*outputs))
+            
             if dist.get_rank() == 0:
-                tqdm.write(prompts[0])
+                tqdm.write(json.dumps(all_texts[0], indent=4))
 
             suffix = "train" if train else "test"
             metrics = {
@@ -198,27 +199,31 @@ class Rollout(Worker):
 
             if dist.get_rank() == 0:
 
+                tensor_dict = pack_tensor_dicts(tensor_dicts)
                 if not self.config.dynamic_filtering:
-                    return tensor_dicts
+                    return tensor_dict
 
                 group_size = self.config.responses_per_prompt
-                rewards = torch.FloatTensor(
-                    [td["rewards"].sum() for td in tensor_dicts]
-                ).view(-1, group_size)
-                are_filtered = (rewards.std(-1) == 0).tolist()
+                rewards = tensor_dict["rewards"].sum(-1).view(-1, group_size)
+                are_filtered = rewards.std(-1) == 0
                 wandb.log({
-                    "dynamic_filtering_ratio": sum(are_filtered) / len(are_filtered)
+                    "dynamic_filtering_ratio": are_filtered.float().mean().item()
                 }, step=step)
-                return sum([
-                    tensor_dicts[idx * group_size:(idx + 1) * group_size]
-                    for idx, is_filtered in enumerate(are_filtered)
-                    if not is_filtered
-                ], [])
+                return {
+                    k:(
+                        v
+                        .view(-1, group_size, v.shape[-1])
+                        [~are_filtered]
+                        .view(-1, v.shape[-1])
+                    )
+                    for k, v in tensor_dict.items()
+                }
         
     @time_logger("update_rollout")
     def update(self, state_dict, step):
 
         torch.cuda.empty_cache()
+        dist.barrier()
         # or llm.resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             self.llm.resume_memory_occupation()
@@ -244,4 +249,5 @@ class Rollout(Worker):
                     )],
                     flush_cache=(idx == len(state_dict) - 1)
                 )
+        state_dict.clear()
         dist.barrier()

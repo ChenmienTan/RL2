@@ -1,6 +1,5 @@
 import torch
 import torch.distributed as dist
-from RL2.utils.sequences import position_ids_to_cu_seqlens
 
 def differentiable_all_reduce(tensor, device_mesh):
 
@@ -79,48 +78,30 @@ def compute_entropy(logits, logsumexp, device_mesh):
 
 def aggregate_values(
     tensor,
-    minibatch,
-    agg_mode,
-    total_actions=None,
-    total_sequences=None
+    action_mask,
+    avg_level,
+    total_actions,
+    total_sequences
 ):
     
     if isinstance(tensor, tuple):
         return tuple(
             aggregate_values(
                 t,
-                minibatch,
-                agg_mode,
+                action_mask,
+                avg_level,
                 total_actions,
                 total_sequences
             )
             for t in tensor
         )
 
-    if agg_mode == "all_token_mean":
+    if avg_level == "token":
         return tensor.sum() / total_actions
-    elif agg_mode == "seq_token_sum":
-        cu_seqlens = position_ids_to_cu_seqlens(
-            minibatch["position_ids"]
-        )
-        return torch.stack([
-            tensor[start_idx:end_idx].sum()
-            for start_idx, end_idx in zip(
-                cu_seqlens[:-1], cu_seqlens[1:]
-            )
-        ])
-    elif agg_mode == "seq_mean_seq_token_mean":
+    elif avg_level == "sequence":
         return (
-            aggregate_values(
-                tensor,
-                minibatch,
-                "seq_token_sum"
-            ) / (
-                aggregate_values(
-                    minibatch["action_mask"],
-                    minibatch,
-                    "seq_token_sum"
-                ) + torch.finfo(tensor.dtype).eps
+            tensor.sum(-1) / (
+                action_mask.sum(-1) + torch.finfo(tensor.dtype).eps
             )
         ).sum() / total_sequences
     else:

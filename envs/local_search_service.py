@@ -33,12 +33,14 @@ def main(args):
 
         query = (await request.json())["query"]
         response = requests.post(
-            f"http://localhost:30000/v1/embeddings", json={
+            f"http://{args.host}:{args.port}/v1/embeddings", json={
                 "model": args.model_name,
                 "input": query
             }
         ).json()
-        embed = np.array([response["data"][0]["embedding"]], dtype=np.float32)
+        embed = np.array(
+            [response["data"][0]["embedding"]], dtype=np.float32
+        )
         _, indices = index.search(embed, k=args.top_k)
         passages = []
         for local_idx, global_idx in enumerate(indices[0]):
@@ -56,6 +58,8 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str)
+    parser.add_argument("--host", type=str, default="localhost")
+    parser.add_argument("--port", type=int, default=30000)
     parser.add_argument("--index_path", type=str)
     parser.add_argument("--corpus_path", type=str)
     parser.add_argument("--top_k", type=int)
