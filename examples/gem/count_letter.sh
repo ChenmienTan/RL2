@@ -44,7 +44,6 @@ torchrun \
     rollout.model_name=Qwen/Qwen3-1.7B-Base \
     rollout.tp_size=1 \
     rollout.train_sampling_params.max_new_tokens=8192 \
-    rollout.apply_chat_template=false \
     rollout.gem_env.env_id=${env} \
     rollout.gem_env.wrappers="" \
     rollout.gem_env.num_env=16 \

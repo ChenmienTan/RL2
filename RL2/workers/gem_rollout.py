@@ -19,8 +19,8 @@ from tqdm.asyncio import tqdm
 from RL2.workers.rollout import Rollout
 from RL2.utils.comm import split_and_scatter_list, gather_and_concat_list
 from RL2.utils.logging import time_logger, gather_and_log
+from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from envs.gem_env import GEMEnvironmentManager, INVALID_ACTION, GEMTransition
-from RL2.datasets import get_tensor_dict
 
 
 class GEMRollout(Rollout):
@@ -439,7 +439,11 @@ class GEMRollout(Rollout):
             # Gather data across distributed processes
             data_list = gather_and_concat_list(data_list, self.device_mesh["dp"])
             
-            return data_list if dist.get_rank() == 0 else None
+            if dist.get_rank() == 0:
+                data_list = pack_tensor_dicts(data_list)
+                return data_list
+            else:
+                return None
             
         # Wait for primary rank
         dist.barrier()

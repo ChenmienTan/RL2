@@ -143,7 +143,7 @@ class Actor(Worker):
                     raw_tis_agg, tis_agg, tis_clamp_ratio_agg = aggregate_values(
                         (raw_tis, tis, tis_clamp_ratio),
                         minibatch,
-                        self.config.agg_mode,
+                        self.config.avg_level,
                         total_actions,
                         total_sequences
                     )
