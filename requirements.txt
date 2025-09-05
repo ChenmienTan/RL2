@@ -8,10 +8,5 @@ peft
 liger_kernel
 sglang[all]==0.4.6.post5
 wandb
-gem-llm
 flash-attn==2.7.4.post1
 torchdata
-
-# Optional dependencies for GEM environment integration
-# Install with: pip install -r requirements.txt -r requirements-gem.txt
-# Or manually: pip install gem-rl

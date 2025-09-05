@@ -26,7 +26,7 @@ def get_dataloader(dataset, batch_size):
         dataset,
         batch_size,
         shuffle=True,
-        drop_last=True if batch_size else False,
+        drop_last=True,
         collate_fn=dataset.collate_fn
     )
 
@@ -42,6 +42,7 @@ def get_tensor_dict(
         states = states[:-1]
         actions = actions[1:]
         action_mask = action_mask[1:]
+
     if max_length is not None:
         states = states[:max_length]
         actions = actions[:max_length]
