@@ -1,7 +1,16 @@
 import copy
 from RL2.datasets.base import BaseDataset
 
+
 class RLDataset(BaseDataset):
+
+    def __init__(self, config, tokenizer, is_custom_rollout=False):
+        if not is_custom_rollout:
+            super().__init__(config, tokenizer)
+        else:
+            self.dataset = [{'prompt': '', 'answer': ''}] * config.get('prompts_per_rollout', 1)
+            self.tokenizer = tokenizer
+            self.config = config
 
     def __getitem__(self, idx):
 
