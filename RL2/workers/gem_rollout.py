@@ -424,6 +424,9 @@ class GEMRollout(Rollout):
             if train:
                 self.llm.release_memory_occupation()
             
+        dist.barrier()
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
             # Prepare metrics for logging
             suffix = "train" if train else "test"
             metrics = {f"{k}/{suffix}": [v] for k, v in collection_info.items()}
@@ -440,11 +443,13 @@ class GEMRollout(Rollout):
             data_list = gather_and_concat_list(data_list, self.device_mesh["dp"])
             
             if dist.get_rank() == 0:
-                data_list = pack_tensor_dicts(data_list)
-                return data_list
-            else:
-                return None
-            
-        # Wait for primary rank
-        dist.barrier()
-        return None
+                tensor_dict = pack_tensor_dicts(data_list)
+                seqs = torch.LongTensor([
+                    len(data_list) for data_list in data_list
+                ])
+                cu_seqs = torch.cumsum(
+                    torch.cat((torch.LongTensor([0]), seqs)), dim=0
+                )
+                return tensor_dict, cu_seqs
+        
+        return None, None
