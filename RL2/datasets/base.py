@@ -83,7 +83,6 @@ class BaseDataset(Dataset):
     def tokenize_prompt_response(
         self, prompt, response, rm=False
     ):
-        
         prompt = self.tokenizer.encode(
             prompt, add_special_tokens=False
         )
