@@ -1,5 +1,6 @@
 import hydra
 from collections import defaultdict
+import torch
 import torch.nn.functional as F
 import torch.distributed as dist
 from tqdm import tqdm
@@ -23,8 +24,13 @@ def update(worker, minibatches, step):
         minibatches, desc="Update actor"
     ):
         logps = worker.forward(minibatch)
+        if worker.config.apply_len_norm:
+            response_lens = minibatch["action_mask"].sum(-1).clamp(min=1)
+        else:
+            response_lens = torch.full_like(minibatch["action_mask"].sum(-1).clamp(min=1),fill_value=1.0)
+            
         chosen_rewards, rejected_rewards = worker.config.beta * (
-            logps - minibatch["ref_logps"]
+            (logps - minibatch["ref_logps"])/response_lens
         ).sum(-1).view(-1, 2).T
         reward_margins = chosen_rewards - rejected_rewards
         loss = - F.logsigmoid(reward_margins).sum() / total_pairs

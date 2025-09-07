@@ -18,6 +18,7 @@ actor:
   scheduler: cosine
   warmup_ratio: 0.1
   offload_optimizer: true
+  apply_len_norm: false
 
 ref_actor:
   model_name: ${actor.model_name}
