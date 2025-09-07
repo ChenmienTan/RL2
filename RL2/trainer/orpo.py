@@ -1,7 +1,8 @@
 import hydra
 from collections import defaultdict
-import torch.nn.functional as F
 import torch.distributed as dist
+import torch.nn.functional as F
+import torch
 from tqdm import tqdm
 from RL2.trainer import Trainer
 from RL2.datasets import DPODataset, get_dataloader
@@ -13,7 +14,7 @@ from RL2.utils.logging import progress_bar, time_logger, gather_and_log
 
 
 @time_logger("update_actor")
-@data_manager(pair=True)
+@data_manager()
 def update(worker, minibatches, step):
 
     total_pairs = count_total(minibatches, "eos_mask", worker.device_mesh["dp"]) // 2
@@ -21,25 +22,30 @@ def update(worker, minibatches, step):
     for minibatch in progress_bar(minibatches, desc="Update actor"):
         logps = worker.forward(minibatch)
         response_lens = minibatch["action_mask"].sum(-1)
-        chosen_rewards, rejected_rewards = worker.config.beta * (
+        chosen_ll, rejected_ll = (
             ((logps).sum(-1) / response_lens.clamp(min=1)).view(-1, 2).T
         )
-        reward_margins = chosen_rewards - rejected_rewards
-        loss = -F.logsigmoid(reward_margins - worker.config.gamma).sum() / total_pairs
+        assert chosen_ll.size(0) == rejected_ll.size(0)
+        chosen_logit = chosen_ll - torch.log1p(
+            -chosen_ll.exp().clamp(max=1 - worker.config.eps)
+        )
+        rejected_logit = rejected_ll - torch.log1p(
+            -rejected_ll.exp().clamp(max=1 - worker.config.eps)
+        )
+        sft_loss = -chosen_ll.mean()
+        odds_loss = -F.logsigmoid(chosen_logit - rejected_logit).sum() / total_pairs
+        loss = sft_loss + worker.config.lambda_orpo * odds_loss
         worker.backward(loss)
-
-        metrics["rewards/chosen"].extend(chosen_rewards.tolist())
-        metrics["rewards/rejected"].extend(rejected_rewards.tolist())
-        metrics["rewards/margin"].extend(reward_margins.tolist())
+        metrics["sft_loss"].append(sft_loss.item())
+        metrics["odds_loss"].append(odds_loss.item())
         metrics["loss"].append(loss.item())
-        metrics["accuracy"].extend((reward_margins > 0).tolist())
 
     grad_norm = worker.optimizer_step()
     metrics["grad_norm"].append(grad_norm)
     gather_and_log(metrics, worker.device_mesh["dp"], step)
 
 
-class SimPOTrainer(Trainer):
+class ORPOTrainer(Trainer):
 
     def __init__(self, config):
         super().__init__(config)
@@ -67,12 +73,12 @@ class SimPOTrainer(Trainer):
         save_model(self, self.actor)
 
 
-@hydra.main(config_path="config", config_name="simpo", version_base=None)
+@hydra.main(config_path="config", config_name="orpo", version_base=None)
 def main(config):
 
     initialize_global_process_group()
 
-    trainer = SimPOTrainer(config)
+    trainer = ORPOTrainer(config)
     trainer.train()
 
     dist.destroy_process_group()

@@ -1,0 +1,30 @@
+data:
+  path: null
+  max_length: null
+  batch_size: 32
+
+actor:
+  model_name: null
+  use_liger_kernel: false
+  gradient_checkpointing: true
+  ddp_size: 1
+  tp_size: 1
+  sp_size: 1
+  max_length_per_device: null
+  lr: 5e-5
+  weight_decay: 1e-2
+  max_grad_norm: 1.0
+  scheduler: cosine
+  warmup_ratio: 0.1
+  offload_optimizer: true
+  lambda_orpo: 0.1
+  eps: 1e-12
+
+trainer:
+  project: null
+  experiment_name: null
+  load_ckpt_from: null
+  n_epochs: 1
+  save_dir: ckpts/${trainer.experiment_name}
+  save_freq: null
+  use_wandb: false
