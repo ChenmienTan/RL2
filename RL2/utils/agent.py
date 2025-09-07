@@ -33,7 +33,6 @@ class AgentBase(ABC):
 class AgentRollout(Rollout):
     def __init__(self, config):
         super().__init__(config)
-        self.agent_instances = []
 
     def _load_agent_class(self):
         agent_class_path = self.config.get('agent_class', None)
@@ -43,14 +42,13 @@ class AgentRollout(Rollout):
         return getattr(module, class_name)
 
     def prepare_environment(self):
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.agent_class = self._load_agent_class()
-            max_parallel_agents = self.config.get('max_parallel_agents', 4)
-            loop = asyncio.get_event_loop()
-            self.agent_instances = loop.run_until_complete(asyncio.gather(*[
-                asyncio.to_thread(self.agent_class, config=self.config, tokenizer=self.tokenizer, agent_id=i)
-                for i in range(max_parallel_agents)
-            ]))
+        self.agent_class = self._load_agent_class()
+        max_parallel_agents = self.config.get('max_parallel_agents', 4)
+        loop = asyncio.get_event_loop()
+        self.agent_instances = loop.run_until_complete(asyncio.gather(*[
+            asyncio.to_thread(self.agent_class, config=self.config, tokenizer=self.tokenizer, agent_id=i)
+            for i in range(max_parallel_agents)
+        ]))
 
     async def rollout(self, agent_idx: int, min_trajectories: int, train: bool) -> Tuple[List[List[Dict]], List[Dict]]:
         agent = self.agent_instances[agent_idx]
@@ -71,7 +69,7 @@ class AgentRollout(Rollout):
                     )
                 
                 state = self.tokenizer(formatted_obs, add_special_tokens=False).input_ids
-                sampling_params = self.config.get("train_sampling_params", {}) if train else self.config.get("test_sampling_params", {})
+                sampling_params = self.test_sampling_params if not train else self.train_sampling_params
                 response = await self.llm.async_generate(input_ids=state, sampling_params=sampling_params, return_logprob=True)
                 
                 action_text = response["text"]
@@ -85,10 +83,10 @@ class AgentRollout(Rollout):
                 trajectories.append({
                     "states": state + action,
                     "actions": len(state) * [0] + action,
-                    "action_masks": len(state) * [0] + len(action) * [1],
+                    "action_mask": len(state) * [0] + len(action) * [1],
                     "logps": [0.0] * len(state) + logp,
-                    "rewards": (len(action) - 1) * [0] + [reward],
-                    "response_length": meta_info["response_length"],
+                    "rewards": (len(state) + len(action) - 1) * [0] + [reward],
+                    "response_length": meta_info["completion_tokens"],
                     "finish_reason": meta_info["finish_reason"]["type"],
                 })
                 
@@ -115,11 +113,10 @@ class AgentRollout(Rollout):
                 }
                 
                 all_tensor_dicts.extend(tensor_dicts)
-                all_metrics.extend(metrics * len(tensor_dicts))
+                all_metrics.append(metrics)
         
         if len(all_tensor_dicts) > min_trajectories:
             all_tensor_dicts = all_tensor_dicts[:min_trajectories]
-            all_metrics = all_metrics[:min_trajectories]
         
         return all_tensor_dicts, all_metrics
 
@@ -141,18 +138,14 @@ class AgentRollout(Rollout):
                 )
             )
             
-            all_tensor_dicts = []
-            all_metrics = []
-            for tensor_dict_lists, metrics_list in results:
-                all_tensor_dicts.extend(tensor_dict_lists)
-                all_metrics.extend(metrics_list)
-            
             if train:
                 self.llm.release_memory_occupation()
         
         dist.barrier()
         
         if self.device_mesh["tp"].get_local_rank() == 0:
+            all_tensor_dicts, all_metrics = map(list, zip(*results))
+            all_metrics = sum(all_metrics, [])
             suffix = "train" if train else "test"
             if all_metrics:
                 logged_metrics = {}
@@ -169,17 +162,11 @@ class AgentRollout(Rollout):
             if dist.get_rank() == 0:
                 if not all_tensor_dicts:
                     return None, None
-                
-                tensor_dicts = []
-                for tensor_dict_list in all_tensor_dicts:
-                    tensor_dicts.extend(tensor_dict_list)
-                
-                if not tensor_dicts:
-                    return None, None
-                    
+
+                tensor_dicts = sum(all_tensor_dicts, [])
                 tensor_dict = pack_tensor_dicts(tensor_dicts)
                 seqs = torch.LongTensor([
-                    len(tensor_dict_list) for tensor_dict_list in all_tensor_dicts
+                    len(tensor_dicts) for tensor_dicts in all_tensor_dicts
                 ])
                 cu_seqs = torch.cumsum(
                     torch.cat((torch.LongTensor([0]), seqs)), dim=0
