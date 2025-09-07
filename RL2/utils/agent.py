@@ -125,7 +125,8 @@ class AgentRollout(Rollout):
         if self.device_mesh["tp"].get_local_rank() == 0:
             rollout_batch_size = self.config.get('rollout_batch_size', 32)
             num_agents = len(self.agent_instances)
-            min_trajectories = max(1, math.ceil(rollout_batch_size / num_agents))
+            dp_size = self.device_mesh["dp"].size()
+            min_trajectories = max(1, math.ceil(rollout_batch_size / (num_agents * dp_size)))
             
             loop = asyncio.get_event_loop()
             results = loop.run_until_complete(
@@ -152,7 +153,7 @@ class AgentRollout(Rollout):
                 for k in all_metrics[0].keys():
                     logged_metrics[f"{k}/{suffix}"] = [m[k] for m in all_metrics]
                 logged_metrics[f"num_episodes/{suffix}"] = [len(all_metrics)]
-                gather_and_log(logged_metrics, self.device_mesh["dp"], step)
+                gather_and_log(logged_metrics, self.device_mesh["dp"], step, metrics_to_sum=[f"num_episodes/{suffix}"])
             
             if not train:
                 return None
