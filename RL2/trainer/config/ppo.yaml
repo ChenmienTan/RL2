@@ -41,7 +41,7 @@ actor:
     coef: 0.0
 
 rollout:
-  rollout_class: null
+  agent_class: null
   model_name: ${actor.model_name}
   dtype: bfloat16
   tp_size: 1

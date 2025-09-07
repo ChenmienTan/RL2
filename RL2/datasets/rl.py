@@ -4,8 +4,8 @@ from RL2.datasets.base import BaseDataset
 
 class RLDataset(BaseDataset):
 
-    def __init__(self, config, tokenizer, is_custom_rollout=False):
-        if not is_custom_rollout:
+    def __init__(self, config, tokenizer, is_agent=False):
+        if not is_agent:
             super().__init__(config, tokenizer)
         else:
             self.dataset = [{'prompt': '', 'answer': ''}] * config.get('prompts_per_rollout', 1)
