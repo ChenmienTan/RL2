@@ -1,8 +1,8 @@
 import hydra
 from collections import defaultdict
-import torch.distributed as dist
-import torch.nn.functional as F
 import torch
+import torch.nn.functional as F
+import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
 from RL2.datasets import DPODataset, get_dataloader
@@ -14,7 +14,7 @@ from RL2.utils.logging import progress_bar, time_logger, gather_and_log
 
 
 @time_logger("update_actor")
-@data_manager()
+@data_manager(pair=True)
 def update(worker, minibatches, step):
 
     total_pairs = count_total(minibatches, "eos_mask", worker.device_mesh["dp"]) // 2
@@ -26,14 +26,19 @@ def update(worker, minibatches, step):
             ((logps).sum(-1) / response_lens.clamp(min=1)).view(-1, 2).T
         )
         assert chosen_ll.size(0) == rejected_ll.size(0)
-        chosen_logit = chosen_ll - torch.log1p(
-            -chosen_ll.exp().clamp(max=1 - worker.config.eps)
+        chosen_exp = chosen_ll.exp().clamp(
+            min=worker.config.eps, max=1 - worker.config.eps
         )
-        rejected_logit = rejected_ll - torch.log1p(
-            -rejected_ll.exp().clamp(max=1 - worker.config.eps)
+        rejected_exp = rejected_ll.exp().clamp(
+            min=worker.config.eps, max=1 - worker.config.eps
         )
+        chosen_logit = torch.log(chosen_exp) - torch.log1p(-chosen_exp)
+        rejected_logit = torch.log(rejected_exp) - torch.log1p(-rejected_exp)
         sft_loss = -chosen_ll.mean()
-        odds_loss = -F.logsigmoid(chosen_logit - rejected_logit).sum() / total_pairs
+        odds_loss = (
+            -F.logsigmoid((chosen_logit - rejected_logit).clamp(min=-20, max=20)).sum()
+            / total_pairs
+        )
         loss = sft_loss + worker.config.lambda_orpo * odds_loss
         worker.backward(loss)
         metrics["sft_loss"].append(sft_loss.item())
