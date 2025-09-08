@@ -111,52 +111,53 @@ class Rollout(Worker):
 
         state_text = ex["prompt"]
         state_dict = self.initialize_state_dict(state_text)
+        env_response = {"extra_info": ex["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
+        scores = []
         for turn in range(1, self.config.max_turns + 1):
 
-            response = await self.llm.async_generate(
+            llm_response = await self.llm.async_generate(
                 input_ids=state_dict["states"],
                 sampling_params=self.train_sampling_params
                 if train else self.test_sampling_params,
                 return_logprob=True
             )
 
-            action_text = response["text"]
-            next_state_text, reward, done = await self.env.step(
-                state_text, action_text, ex["answer"]
+            action_text = llm_response["text"]
+            env_response = await self.env.step(
+                state_text, action_text, env_response["extra_info"]
             )
 
-            meta_info = response["meta_info"]
+            meta_info = llm_response["meta_info"]
             logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
             state_dict["states"].extend(action)
             state_dict["actions"].extend(action)
             state_dict["action_mask"].extend(len(action) * [1])
             state_dict["logps"].extend(logp)
-            state_dict["rewards"].extend((len(action) - 1) * [0] + [reward])
+            state_dict["rewards"].extend((len(action) - 1) * [0] + [env_response["reward"]])
             metric["response_length"].append(meta_info["completion_tokens"])
             metric["length_clip_ratio"].append(
                 meta_info["finish_reason"]["type"] == "length"
             )
+            scores.append(env_response["score"])
 
-            if turn == self.config.max_turns or done:
+            if turn == self.config.max_turns or env_response["done"]:
                 tensor_dicts.append(self.get_tensor_dict(state_dict))
                 break
-            if next_state_text.startswith(state_text + action_text):
+            if env_response["next_state"].startswith(state_text + action_text):
                 state_dict_delta = self.initialize_state_dict(
-                    next_state_text[len(state_text + action_text):]
+                    env_response["next_state"][len(state_text + action_text):]
                 )
                 for k, v in state_dict_delta.items():
                     state_dict[k].extend(v)
             else:
                 tensor_dicts.append(self.get_tensor_dict(state_dict))
-                state_dict = self.initialize_state_dict(next_state_text)
-            state_text = next_state_text
+                state_dict = self.initialize_state_dict(env_response["next_state"])
+            state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
-        metric["rewards"].append(
-            sum([td["rewards"].sum().item() for td in tensor_dicts])
-        )
+        metric["scores"].append(sum(scores))
 
         return tensor_dicts, metric
 

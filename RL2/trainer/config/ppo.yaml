@@ -5,7 +5,7 @@ train_data:
 
 test_data:
   path: null
-  response_per_prompt: 1
+  responses_per_prompt: 1
   
 actor:
   model_name: null

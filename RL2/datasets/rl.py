@@ -24,12 +24,10 @@ class RLDataset(BaseDataset):
                 add_generation_prompt=True,
                 tokenize=False
             )
-            
-        answer = ex["answer"]
 
         return {
             "prompt": prompt,
-            "answer": answer
+            "extra_info": ex.get("extra_info", {})
         }
 
     def collate_fn(self, batch):

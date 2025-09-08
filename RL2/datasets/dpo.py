@@ -7,18 +7,21 @@ class DPODataset(RMDataset):
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
-            return self.tokenize_prompt_response(
+            chosen = self.tokenize_prompt_response(
                 ex["prompt"], ex["chosen"]
-            ), self.tokenize_prompt_response(
+            )
+            rejected = self.tokenize_prompt_response(
                 ex["prompt"], ex["rejected"]
             )
         else:
-            return self.tokenize_messages(
+            chosen = self.tokenize_messages(
                 ex["messages"] + [
                     {"role": "assistant", "content": ex["chosen"]}
                 ]
-            ), self.tokenize_messages(
+            )
+            rejected = self.tokenize_messages(
                 ex["messages"] + [
                     {"role": "assistant", "content": ex["rejected"]}
                 ]
             )
+        return chosen, rejected

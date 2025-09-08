@@ -7,21 +7,24 @@ class RMDataset(BaseDataset):
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
-            return self.tokenize_prompt_response(
+            chosen = self.tokenize_prompt_response(
                 ex["prompt"], ex["chosen"], rm=True
-            ), self.tokenize_prompt_response(
+            )
+            rejected = self.tokenize_prompt_response(
                 ex["prompt"], ex["rejected"], rm=True
             )
         else:
-            return self.tokenize_messages(
+            chosen = self.tokenize_messages(
                 ex["messages"] + [
                     {"role": "assistant", "content": ex["chosen"]}
                 ], rm=True
-            ), self.tokenize_messages(
+            )
+            rejected = self.tokenize_messages(
                 ex["messages"] + [
                     {"role": "assistant", "content": ex["rejected"]}
                 ], rm=True
             )
+        return chosen, rejected
     
     def collate_fn(self, batch):
         return pack_tensor_dicts(
