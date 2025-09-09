@@ -35,13 +35,32 @@ def action_extractor(func):
                 for k, v in tensor_dict.items()
             }
         
+        def _apply_discounted_rewards(extracted_dict):
+            # Apply gamma discounting: only last action gets full reward, earlier ones get discounted
+            gamma = 1.0
+            indices = torch.where(extracted_dict["action_mask"])
+            print(f"shape of action_mask: {extracted_dict['action_mask'].shape}")
+            action_diff = torch.diff(indices.float(), append=torch.tensor([0.0]))
+            last_reward_indices = torch.where(action_diff == -1)[0]
+            if len(last_reward_indices) > 0:
+                final_reward = extracted_dict["rewards"][last_reward_indices[-1]].item()
+                extracted_dict = dict(extracted_dict)
+                rewards = torch.zeros_like(extracted_dict["rewards"])
+                rewards[-1] = final_reward
+                discounted_reward = final_reward * gamma
+                for i in reversed(range(len(rewards) - 1)):
+                    rewards[i] = discounted_reward
+                    discounted_reward *= gamma
+                extracted_dict["rewards"] = rewards
+            return extracted_dict
+        
         tensor_dict = pack_tensor_dicts([
-            _extract_actions(
-                {
-                    k: v[start_idx:end_idx]
-                    for k, v in raw_tensor_dict.items()
-                }
-            )
+                _extract_actions(
+                    _apply_discounted_rewards({
+                        k: v[start_idx:end_idx]
+                        for k, v in raw_tensor_dict.items()
+                    })
+                )
             for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
         ])
 
@@ -85,32 +104,10 @@ def compute_gae(tensor_dict, cu_seqs, gamma, lamda):
 @action_extractor
 def compute_reinforce_adv(
     tensor_dict,
-    cu_seqs,
     responses_per_prompt,
     global_norm: bool,
     norm_var: bool
 ):
-    gamma = 1.0
-    
-    for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:]):
-        trajectory_rewards = tensor_dict["rewards"][start_idx:end_idx]
-        trajectory_mask = tensor_dict["action_mask"][start_idx:end_idx]
-        
-        action_indices = torch.where(trajectory_mask)[0]
-        if len(action_indices) > 0:
-            action_diff = torch.diff(trajectory_mask.float(), append=torch.tensor([0.0]))
-            last_reward_indices = torch.where(action_diff == -1)[0]
-            
-            if trajectory_mask[-1] == 1:
-                last_reward_indices = torch.cat([last_reward_indices, torch.tensor([len(trajectory_mask) - 1])])
-            
-            if len(last_reward_indices) > 0:
-                discounted_reward = trajectory_rewards[last_reward_indices[-1]].item()
-                
-                for last_idx in reversed(last_reward_indices):
-                    tensor_dict["rewards"][start_idx + last_idx] = discounted_reward
-                    discounted_reward *= gamma
-    
     rewards = tensor_dict["rewards"].sum(-1).view(-1, responses_per_prompt)
 
     if global_norm:
