@@ -10,7 +10,6 @@ NUM_ENVS = 16
 GAME = "rg:letter_counting"
 WRAPPERS = ""
 PROMPT_TEMPLATE = "qwen3_general"
-# Environment pool with locks for async access control
 ENV_POOL = []
 ENV_LOCKS = []
 ENV_IN_USE = []
@@ -49,14 +48,12 @@ TEMPLATE_FACTORY = {
 }
 
 def _initialize_environments():
-    """Initialize NUM_ENVS environments at module import time."""
     global ENV_POOL, ENV_LOCKS, ENV_IN_USE
     
     logging.info(f"Initializing {NUM_ENVS} GEM environments...")
     
     for i in range(NUM_ENVS):
         try:
-            # Create environment with unique seed
             env = gem.make_vec(
                 [GAME],
                 vec_kwargs=[{"seed": 233 + i}],
@@ -76,43 +73,16 @@ def _initialize_environments():
 _initialize_environments()
 
 async def acquire_env_lock(extra_info: Dict[str, Any]) -> int:
-    """
-    Acquire an environment lock for an episode.
-    
-    Args:
-        extra_info: Dictionary containing idx for routing
-        
-    Returns:
-        Environment index that was locked
-    """
     env_idx = extra_info['idx'] % NUM_ENVS
-    
-    # Acquire lock and mark environment as in use
     await ENV_LOCKS[env_idx].acquire()
     ENV_IN_USE[env_idx] = True
     return env_idx
 
 def release_env_lock(env_idx: int):
-    """
-    Release an environment lock after episode completion.
-    
-    Args:
-        env_idx: Environment index to release
-    """
     ENV_IN_USE[env_idx] = False
     ENV_LOCKS[env_idx].release()
 
 async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
-    """
-    Reset an environment based on idx and acquire lock for the episode.
-    
-    Args:
-        extra_info: Dictionary containing idx for routing
-        **kwargs: Additional arguments including seed
-    
-    Returns:
-        Initial observation string
-    """
     env_idx = await acquire_env_lock(extra_info)
     
     try:
@@ -125,35 +95,20 @@ async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
         
         return formatted_observation
     except Exception as e:
-        # Release lock on error
         release_env_lock(env_idx)
         logging.error(f"Error resetting environment {env_idx}: {e}")
         raise
 
 async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Execute a step in the environment.
-    Note: The environment should already be locked from reset().
-    
-    Args:
-        state: Current state (not used in gem envs but kept for compatibility)
-        action: Action to execute
-        extra_info: Dictionary containing request_idx for routing
-    
-    Returns:
-        Dictionary with next_state, reward, score, done, and extra_info
-    """
     request_idx = extra_info['idx']
     env_idx = request_idx % NUM_ENVS
     
-    # Environment should already be locked from reset()
     if not ENV_IN_USE[env_idx]:
         raise RuntimeError(f"Environment {env_idx} not locked - reset() must be called first")
     
     try:
         next_obs, reward, terminated, truncated, info = ENV_POOL[env_idx].step([action])
         
-        # Handle vectorized environment outputs
         if isinstance(next_obs, list):
             next_obs = next_obs[0]
         if isinstance(reward, list):

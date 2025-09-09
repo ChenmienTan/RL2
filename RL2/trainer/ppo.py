@@ -2,7 +2,6 @@ import hydra
 import torch.distributed as dist
 from tqdm import tqdm
 import wandb
-
 from RL2.trainer import Trainer
 from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import Actor, Rollout, Critic
@@ -14,6 +13,7 @@ from RL2.utils.algorithms import (
 from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
 from RL2.utils.logging import time_logger
+
 
 class PPOTrainer(Trainer):
 
@@ -29,10 +29,10 @@ class PPOTrainer(Trainer):
         if config.adv.estimator == "gae":
             self.critic = Critic(config.critic)
             self.critic.scheduler = self.prepare_scheduler(self.critic)
-        self.rollout = Rollout(config.rollout)  
+        self.rollout = Rollout(config.rollout)    
 
     def get_dataloader(self, train: bool):
-        
+
         dataset = RLDataset(
             self.config.train_data
             if train else self.config.test_data,
