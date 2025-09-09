@@ -44,7 +44,6 @@ def gather_and_log(metrics, device_mesh, step, metrics_to_sum=["loss"]):
             k: sum(v) / (1.0 if k in metrics_to_sum else len(v))
             for k, v in metrics.items()
         }
-        print(metrics)
         tqdm.write(f"Step {step}, " + ", ".join([
             f"{k}: {v:.3g}" for k, v in metrics.items()
         ]))

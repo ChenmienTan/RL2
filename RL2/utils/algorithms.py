@@ -35,32 +35,13 @@ def action_extractor(func):
                 for k, v in tensor_dict.items()
             }
         
-        def _apply_discounted_rewards(extracted_dict):
-            # Apply gamma discounting: only last action gets full reward, earlier ones get discounted
-            gamma = 1.0
-            indices = torch.where(extracted_dict["action_mask"])
-            print(f"shape of action_mask: {extracted_dict['action_mask'].shape}")
-            action_diff = torch.diff(indices.float(), append=torch.tensor([0.0]))
-            last_reward_indices = torch.where(action_diff == -1)[0]
-            if len(last_reward_indices) > 0:
-                final_reward = extracted_dict["rewards"][last_reward_indices[-1]].item()
-                extracted_dict = dict(extracted_dict)
-                rewards = torch.zeros_like(extracted_dict["rewards"])
-                rewards[-1] = final_reward
-                discounted_reward = final_reward * gamma
-                for i in reversed(range(len(rewards) - 1)):
-                    rewards[i] = discounted_reward
-                    discounted_reward *= gamma
-                extracted_dict["rewards"] = rewards
-            return extracted_dict
-        
         tensor_dict = pack_tensor_dicts([
-                _extract_actions(
-                    _apply_discounted_rewards({
-                        k: v[start_idx:end_idx]
-                        for k, v in raw_tensor_dict.items()
-                    })
-                )
+            _extract_actions(
+                {
+                    k: v[start_idx:end_idx]
+                    for k, v in raw_tensor_dict.items()
+                }
+            )
             for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:])
         ])
 
@@ -77,7 +58,7 @@ def action_extractor(func):
     return compute_adv_with_action_extraction
 
 @action_extractor
-def compute_gae(tensor_dict, cu_seqs, gamma, lamda):
+def compute_gae(tensor_dict, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
     next_values = torch.cat((
@@ -108,6 +89,7 @@ def compute_reinforce_adv(
     global_norm: bool,
     norm_var: bool
 ):
+    
     rewards = tensor_dict["rewards"].sum(-1).view(-1, responses_per_prompt)
 
     if global_norm:

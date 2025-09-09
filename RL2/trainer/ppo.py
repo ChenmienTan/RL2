@@ -72,6 +72,7 @@ class PPOTrainer(Trainer):
         elif self.config.adv.estimator == "reinforce":
             compute_reinforce_adv(
                 tensor_dict,
+                cu_seqs,
                 self.config.train_data.responses_per_prompt,
                 self.config.adv.global_norm,
                 self.config.adv.norm_var

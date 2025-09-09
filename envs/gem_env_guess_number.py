@@ -1,0 +1,189 @@
+import random
+import time
+import logging
+import asyncio
+from typing import Dict, Any, List
+import gem
+from gem.wrappers.wrapper_factory import get_wrapper_fns
+
+NUM_ENVS = 16
+GAME = "game:GuessTheNumber-v0"
+WRAPPERS = "concat"
+PROMPT_TEMPLATE = "qwen3_general"
+# Environment pool with locks for async access control
+ENV_POOL = []
+ENV_LOCKS = []
+ENV_IN_USE = []
+
+def apply_qwen3_game_template(observation: str) -> str:
+    return (
+        f"<|im_start|>user\nYou are playing language games. Make valid actions to win.\nObservation: {observation}"
+        "\nPlease reason step by step, and put your final answer within \\boxed{}.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+def apply_no_template(observation: str) -> str:
+    return observation
+
+def apply_qwen3_general_template(observation: str) -> str:
+    return (
+        f"<|im_start|>user\nQuestion: {observation}"
+        "\nPlease reason step by step, and put your final answer within \\boxed{}.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+def apply_code_template(observation: str) -> str:
+    return (
+        "You are an expert Python programmer. "
+        "You will be given a question (problem specification) and will generate a correct "
+        "Python program that matches the specification and passes all tests."
+        f"\nQuestion: {observation}"
+        "\nPlease reason step by step, and write your code in markdown format, e.g., ```python\n# YOUR CODE HERE\n```."
+    )
+
+TEMPLATE_FACTORY = {
+    "qwen3_game": apply_qwen3_game_template,
+    "no": apply_no_template,
+    "qwen3_general": apply_qwen3_general_template,
+    "code": apply_code_template,
+}
+
+def _initialize_environments():
+    """Initialize NUM_ENVS environments at module import time."""
+    global ENV_POOL, ENV_LOCKS, ENV_IN_USE
+    
+    logging.info(f"Initializing {NUM_ENVS} GEM environments...")
+    
+    for i in range(NUM_ENVS):
+        try:
+            # Create environment with unique seed
+            env = gem.make_vec(
+                [GAME],
+                vec_kwargs=[{"seed": 233 + i}],
+                wrappers=get_wrapper_fns(WRAPPERS if WRAPPERS else "", tokenizer=None),
+                async_mode=False,
+            )
+            ENV_POOL.append(env)
+            ENV_LOCKS.append(asyncio.Lock())
+            ENV_IN_USE.append(False)
+            logging.info(f"Initialized environment {i}/{NUM_ENVS}")
+        except Exception as e:
+            logging.error(f"Failed to initialize environment {i}: {e}")
+            raise
+    
+    logging.info(f"Successfully initialized {len(ENV_POOL)} GEM environments")
+
+_initialize_environments()
+
+async def acquire_env_lock(extra_info: Dict[str, Any]) -> int:
+    """
+    Acquire an environment lock for an episode.
+    
+    Args:
+        extra_info: Dictionary containing idx for routing
+        
+    Returns:
+        Environment index that was locked
+    """
+    env_idx = extra_info['idx'] % NUM_ENVS
+    
+    # Acquire lock and mark environment as in use
+    await ENV_LOCKS[env_idx].acquire()
+    ENV_IN_USE[env_idx] = True
+    return env_idx
+
+def release_env_lock(env_idx: int):
+    """
+    Release an environment lock after episode completion.
+    
+    Args:
+        env_idx: Environment index to release
+    """
+    ENV_IN_USE[env_idx] = False
+    ENV_LOCKS[env_idx].release()
+
+async def reset(extra_info: Dict[str, Any], **kwargs) -> str:
+    """
+    Reset an environment based on idx and acquire lock for the episode.
+    
+    Args:
+        extra_info: Dictionary containing idx for routing
+        **kwargs: Additional arguments including seed
+    
+    Returns:
+        Initial observation string
+    """
+    env_idx = await acquire_env_lock(extra_info)
+    
+    try:
+        observation, _ = ENV_POOL[env_idx].reset()
+        
+        if isinstance(observation, list):
+            observation = observation[0]
+
+        formatted_observation = TEMPLATE_FACTORY[PROMPT_TEMPLATE](observation)
+        
+        return formatted_observation
+    except Exception as e:
+        # Release lock on error
+        release_env_lock(env_idx)
+        logging.error(f"Error resetting environment {env_idx}: {e}")
+        raise
+
+async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Execute a step in the environment.
+    Note: The environment should already be locked from reset().
+    
+    Args:
+        state: Current state (not used in gem envs but kept for compatibility)
+        action: Action to execute
+        extra_info: Dictionary containing request_idx for routing
+    
+    Returns:
+        Dictionary with next_state, reward, score, done, and extra_info
+    """
+    request_idx = extra_info['idx']
+    env_idx = request_idx % NUM_ENVS
+    
+    # Environment should already be locked from reset()
+    if not ENV_IN_USE[env_idx]:
+        raise RuntimeError(f"Environment {env_idx} not locked - reset() must be called first")
+    
+    try:
+        next_obs, reward, terminated, truncated, info = ENV_POOL[env_idx].step([action])
+        
+        # Handle vectorized environment outputs
+        if isinstance(next_obs, list):
+            next_obs = next_obs[0]
+        if isinstance(reward, list):
+            reward = reward[0]
+        if isinstance(terminated, list):
+            terminated = terminated[0]
+        if isinstance(truncated, list):
+            truncated = truncated[0]
+        if isinstance(info, list):
+            info = info[0] if info else {}
+        
+        done = terminated or truncated
+        
+        extra_info = {
+            **extra_info,
+            **info
+        }
+        
+        if done:
+            release_env_lock(env_idx)
+
+        formatted_next_obs = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_obs)
+        return {
+            "next_state": formatted_next_obs,
+            "reward": float(reward),
+            "score": float(reward),
+            "done": done,
+            "extra_info": extra_info
+        }
+    except Exception as e:
+        release_env_lock(env_idx)
+        logging.error(f"Error stepping environment {env_idx}: {e}")
+        raise
