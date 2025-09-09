@@ -35,10 +35,7 @@ def update(worker, minibatches, step):
         chosen_logit = torch.log(chosen_exp) - torch.log1p(-chosen_exp)
         rejected_logit = torch.log(rejected_exp) - torch.log1p(-rejected_exp)
         sft_loss = -chosen_ll.mean()
-        odds_loss = (
-            -F.logsigmoid((chosen_logit - rejected_logit).clamp(min=-20, max=20)).sum()
-            / total_pairs
-        )
+        odds_loss = -F.logsigmoid(chosen_logit - rejected_logit).sum() / total_pairs
         loss = sft_loss + worker.config.lambda_orpo * odds_loss
         worker.backward(loss)
         metrics["sft_loss"].append(sft_loss.item())
