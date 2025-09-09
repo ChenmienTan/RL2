@@ -58,7 +58,7 @@ def action_extractor(func):
     return compute_adv_with_action_extraction
 
 @action_extractor
-def compute_gae(tensor_dict, gamma, lamda):
+def compute_gae(tensor_dict, cu_seqs, gamma, lamda):
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
     next_values = torch.cat((
@@ -85,10 +85,31 @@ def compute_gae(tensor_dict, gamma, lamda):
 @action_extractor
 def compute_reinforce_adv(
     tensor_dict,
+    cu_seqs,
     responses_per_prompt,
     global_norm: bool,
     norm_var: bool
 ):
+    gamma = 1.0
+    
+    for start_idx, end_idx in zip(cu_seqs[:-1], cu_seqs[1:]):
+        trajectory_rewards = tensor_dict["rewards"][start_idx:end_idx]
+        trajectory_mask = tensor_dict["action_mask"][start_idx:end_idx]
+        
+        action_indices = torch.where(trajectory_mask)[0]
+        if len(action_indices) > 0:
+            action_diff = torch.diff(trajectory_mask.float(), append=torch.tensor([0.0]))
+            last_reward_indices = torch.where(action_diff == -1)[0]
+            
+            if trajectory_mask[-1] == 1:
+                last_reward_indices = torch.cat([last_reward_indices, torch.tensor([len(trajectory_mask) - 1])])
+            
+            if len(last_reward_indices) > 0:
+                discounted_reward = trajectory_rewards[last_reward_indices[-1]].item()
+                
+                for last_idx in reversed(last_reward_indices):
+                    tensor_dict["rewards"][start_idx + last_idx] = discounted_reward
+                    discounted_reward *= gamma
     
     rewards = tensor_dict["rewards"].sum(-1).view(-1, responses_per_prompt)
 

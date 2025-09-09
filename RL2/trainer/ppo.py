@@ -14,7 +14,7 @@ from RL2.utils.algorithms import (
 from RL2.utils.comm import initialize_global_process_group
 from RL2.utils.checkpointing import load_ckpt, save_ckpt, save_model
 from RL2.utils.logging import time_logger
-from RL2.utils.rollout_loader import Rollout, has_agent_class
+from RL2.workers.rollout import Rollout
 
 class PPOTrainer(Trainer):
 
@@ -36,8 +36,7 @@ class PPOTrainer(Trainer):
         dataset = RLDataset(
             self.config.train_data
             if train else self.config.test_data,
-            self.actor.tokenizer,
-            is_agent=has_agent_class(self.config.rollout)
+            self.actor.tokenizer
         )
 
         return get_dataloader(
