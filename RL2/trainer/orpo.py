@@ -21,21 +21,18 @@ def update(worker, minibatches, step):
     metrics = defaultdict(list)
     for minibatch in progress_bar(minibatches, desc="Update actor"):
         logps = worker.forward(minibatch)
-        response_lens = minibatch["action_mask"].sum(-1)
-        chosen_ll, rejected_ll = (
-            ((logps).sum(-1) / response_lens.clamp(min=1)).view(-1, 2).T
+        chosen_logps = logps[0::2].sum(-1)
+        rejected_logps = logps[1::2].sum(-1)
+        chosen_lens = minibatch["action_mask"][0::2].sum(-1).clamp(min=1)
+        rejected_lens = minibatch["action_mask"][1::2].sum(-1).clamp(min=1)
+        chosen_logps = chosen_logps / chosen_lens
+        rejected_logps = rejected_logps / rejected_lens
+        log_odds = (chosen_logps - rejected_logps) - (
+            torch.log1p(-torch.exp(chosen_logps).clamp(max=1 - worker.config.eps))
+            - torch.log1p(-torch.exp(rejected_logps).clamp(max=1 - worker.config.eps))
         )
-        assert chosen_ll.size(0) == rejected_ll.size(0)
-        chosen_exp = chosen_ll.exp().clamp(
-            min=worker.config.eps, max=1 - worker.config.eps
-        )
-        rejected_exp = rejected_ll.exp().clamp(
-            min=worker.config.eps, max=1 - worker.config.eps
-        )
-        chosen_logit = torch.log(chosen_exp) - torch.log1p(-chosen_exp)
-        rejected_logit = torch.log(rejected_exp) - torch.log1p(-rejected_exp)
-        sft_loss = -chosen_ll.mean()
-        odds_loss = -F.logsigmoid(chosen_logit - rejected_logit).sum() / total_pairs
+        odds_loss = -F.logsigmoid(log_odds).mean()
+        sft_loss = -chosen_logps.mean()
         loss = sft_loss + worker.config.lambda_orpo * odds_loss
         worker.backward(loss)
         metrics["sft_loss"].append(sft_loss.item())
