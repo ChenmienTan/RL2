@@ -173,8 +173,8 @@ async def step(state: str, action: str, extra_info: Dict[str, Any]) -> Dict[str,
         formatted_next_obs = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_obs)
         return {
             "next_state": formatted_next_obs,
-            "reward": reward,
-            "score": reward,
+            "reward": float(reward),
+            "score": float(reward),
             "done": done,
             "extra_info": info
         }
