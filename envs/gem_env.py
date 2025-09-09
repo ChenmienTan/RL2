@@ -54,12 +54,13 @@ def _initialize_environments():
     
     for i in range(NUM_ENVS):
         try:
-            env = gem.make_vec(
-                [GAME],
-                vec_kwargs=[{"seed": 233 + i}],
-                wrappers=get_wrapper_fns(WRAPPERS.split(",") if WRAPPERS else [], tokenizer=None),
-                async_mode=False,
+            env = gem.make(
+                env_id=GAME,
+                seed=233 + i,
             )
+            wrappers = get_wrapper_fns(WRAPPERS if WRAPPERS else "", tokenizer=None)
+            for wrapper in wrappers:
+                env = wrapper(env)
             ENV_POOL.append(env)
             ENV_LOCKS.append(asyncio.Lock())
             ENV_IN_USE.append(False)
