@@ -15,6 +15,7 @@ We also support
 
 * Balanced sequence packing for higher throughput
 * Multi-turn rollout with [SGLang](https://github.com/sgl-project/sglang) async inference engine
+* [GEM](https://github.com/axon-rl/gem.git) (OpenAI Gym like) Agentic Environments
 
 RL2 is a production-ready library! Check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenThoughts_archive), [SkyworkRM](https://wandb.ai/chenmientan/SkyworkRM_archive), [UltraFeedback](https://wandb.ai/chenmientan/UltraFeedback_archive), [OpenReasonerZero](https://wandb.ai/chenmientan/OpenReasonerZero_archive), and [SearchR1](https://wandb.ai/chenmientan/SearchR1_archive).
 
@@ -22,7 +23,7 @@ RL2 is a production-ready library! Check our wandb report on [OpenThoughts](http
 
 - [ ] Support partial rollout to increase GPU utilization
 - [ ] Use SGLang Router to forward requests for load balance between inference engines
-- [ ] Integrate GEM to scale environments
+- [X] Integrate GEM to scale environments
 
 ## Getting Started
 
