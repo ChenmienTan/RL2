@@ -50,6 +50,7 @@ def launch_server_process(server_args):
     server_args = OmegaConf.to_container(server_args)
     server_args = ServerArgs(
         enable_memory_saver=True,
+        enable_weights_cpu_backup=server_args['use_lora'],
         host=get_host(),
         port=get_available_port(),
         log_level="error",

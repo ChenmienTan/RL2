@@ -54,6 +54,25 @@ class FSDPWorker(Worker):
         if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
+        use_lora = self.config.use_lora
+        if use_lora:
+            if self.config.tp_size > 1:
+                raise ValueError("Tensor parallelism is not supported with LoRA.")
+            from peft import LoraConfig, get_peft_model, TaskType
+            if hasattr(self.model, 'lm_head'):
+                task_type = TaskType.CAUSAL_LM
+            elif hasattr(self.model, 'score'):
+                task_type = TaskType.SEQ_CLS
+            else:
+                raise ValueError("Model has no LM head or score attribute.")
+
+            lora_config = OmegaConf.to_container(self.config.lora)
+            lora_config = LoraConfig(
+                **lora_config,
+                task_type=task_type
+            )
+            self.model = get_peft_model(self.model, lora_config)
+
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
 
@@ -185,14 +204,23 @@ class FSDPWorker(Worker):
             checkpoint_id=f"{save_dir}/optimizer_scheduler"
         )
 
+    def save_lora(self, save_dir):
+        self.load_model_to_device(torch.cuda.current_device())
+        self.model.save_pretrained(save_dir, is_main_process=dist.get_rank() == 0)
+        self.load_model_to_device("cpu")
+
     def save_model(self, save_dir):
 
-        state_dict = self.get_model_state_dict(full_state_dict=True)
-        if dist.get_rank() == 0:
+        if self.config.use_lora:
+            self.save_lora(save_dir)
+        else:
+            state_dict = self.get_model_state_dict(full_state_dict=True)
+            if dist.get_rank() == 0:
+                self.model.module.save_pretrained(
+                    save_dir, state_dict=state_dict
+                )
 
+        if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
-            self.model.module.save_pretrained(
-                save_dir, state_dict=state_dict
-            )
 
         dist.barrier()

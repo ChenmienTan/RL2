@@ -28,6 +28,7 @@ class Rollout:
     def __init__(self, config):
         
         self.config = config
+        self.lora_loaded = False
         self.prepare_device_mesh()
         prepare_environment_variables(self.device_mesh["tp"].get_group())
         if self.device_mesh["tp"].get_local_rank() == 0:
@@ -265,7 +266,29 @@ class Rollout:
             return tensor_dict, cu_seqs
 
         return None, None
-    
+        
+    @torch.no_grad()
+    def update_lora(self, lora_dir):
+        self.make_request("flush_cache", "GET")
+        torch.cuda.empty_cache()
+        dist.barrier()
+        # or resume_memory_occupation() may OOM
+        self.make_request("resume_memory_occupation")
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            payload = {
+                "lora_name": "default"
+            }
+            if self.lora_loaded:
+                self.make_request("unload_lora_adapter", payload=payload)
+                self.lora_loaded = False
+
+            payload["lora_path"] = lora_dir
+            self.make_request("load_lora_adapter", payload=payload)
+            self.lora_loaded = True
+
+        dist.barrier()
+
     @torch.no_grad()
     def update(self, named_tensor_generator):
 

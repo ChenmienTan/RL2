@@ -40,6 +40,9 @@ rollout:
     dtype: bfloat16
     tp_size: 1
     mem_fraction_static: 0.6
+    enable_lora: ${actor.use_lora}
+    max_lora_rank: ${actor.lora.r}
+    lora_target_modules: ${actor.lora.target_modules}
   responses_per_prompt: ${train_data.responses_per_prompt}
   train_sampling_params:
     temperature: 1.0

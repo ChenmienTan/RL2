@@ -13,3 +13,18 @@ scheduler:
   name: constant
   warmup_ratio: 0.1
 offload_optimizer: true
+use_lora: false
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  use_rslora: false
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  modules_to_save: null

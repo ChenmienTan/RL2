@@ -17,9 +17,10 @@ def prepare_dp_model(model, device_mesh):
             if module.__class__.__name__ == name:
                 return module.__class__
 
+    base_model = model.get_base_model() if hasattr(model, 'peft_config') else model
     transformer_layer_cls = {
         get_module_cls_from_name(name)
-        for name in model._no_split_modules
+        for name in base_model._no_split_modules
     }
     auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
@@ -40,5 +41,6 @@ def prepare_dp_model(model, device_mesh):
         param_init_fn=param_init_fn,
         sync_module_states=device_mesh["tp"].size() == 1,
         device_mesh=device_mesh["ddp", "fsdp"],
-        device_id=torch.cuda.current_device()
+        device_id=torch.cuda.current_device(),
+        use_orig_params=hasattr(model, 'peft_config')
     )

@@ -22,3 +22,18 @@ scheduler:
   end_wd: ${actor.optimizer.weight_decay}
   wd_incr_style: constant
 offload_optimizer: true
+use_lora: false
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  use_rslora: false
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  modules_to_save: null
