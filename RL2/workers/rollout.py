@@ -266,7 +266,7 @@ class Rollout:
             return tensor_dict, cu_seqs
 
         return None, None
-        
+
     @torch.no_grad()
     def update_lora(self, lora_dir):
         self.make_request("flush_cache", "GET")
