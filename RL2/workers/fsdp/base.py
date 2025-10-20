@@ -14,6 +14,7 @@ from RL2.workers import Worker
 from RL2.utils.fsdp.data_parallelism import prepare_dp_model
 from RL2.utils.fsdp.tensor_parallelism import prepare_tp_model
 from RL2.utils.sequences import scatter_data, gather_data
+from RL2.utils.lora import wrap_peft_model
 
 
 class FSDPWorker(Worker):
@@ -54,24 +55,8 @@ class FSDPWorker(Worker):
         if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        use_lora = self.config.use_lora
-        if use_lora:
-            if self.config.tp_size > 1:
-                raise ValueError("Tensor parallelism is not supported with LoRA.")
-            from peft import LoraConfig, get_peft_model, TaskType
-            if hasattr(self.model, 'lm_head'):
-                task_type = TaskType.CAUSAL_LM
-            elif hasattr(self.model, 'score'):
-                task_type = TaskType.SEQ_CLS
-            else:
-                raise ValueError("Model has no LM head or score attribute.")
-
-            lora_config = OmegaConf.to_container(self.config.lora)
-            lora_config = LoraConfig(
-                **lora_config,
-                task_type=task_type
-            )
-            self.model = get_peft_model(self.model, lora_config)
+        if self.config.use_lora:
+            self.model = wrap_peft_model(self.model, self.config.lora)
 
         if self.config.tp_size > 1:
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
