@@ -6,13 +6,9 @@ defaults:
 
 train_data:
   path: null
-  prompts_per_rollout: null
-  responses_per_prompt: 1
 
 test_data:
   path: null
-  prompts_per_rollout: null
-  responses_per_prompt: 1
 
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}
@@ -41,7 +37,9 @@ rollout:
     dtype: bfloat16
     tp_size: 1
     mem_fraction_static: 0.6
-  responses_per_prompt: ${train_data.responses_per_prompt}
+  train_prompts_per_rollout: null
+  test_prompts_per_rollout: null
+  responses_per_prompt: null
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: null
@@ -78,7 +76,7 @@ trainer:
   project: null
   experiment_name: null
   load_ckpt_from: null
-  n_epochs: 1
+  total_steps: null
   test_freq: null
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null

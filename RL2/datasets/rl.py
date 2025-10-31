@@ -1,6 +1,4 @@
-import copy
-import torch
-from RL2.datasets.base import BaseDataset, get_tensor_dict
+from RL2.datasets.base import BaseDataset
 
 
 class RLDataset(BaseDataset):
@@ -21,10 +19,3 @@ class RLDataset(BaseDataset):
 
         data["extra_info"] = ex.get("extra_info", {})
         return data
-
-    def collate_fn(self, data_list):
-        return [
-            copy.deepcopy(data)
-            for data in data_list
-            for _ in range(self.config.responses_per_prompt)
-        ]

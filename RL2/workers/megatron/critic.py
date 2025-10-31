@@ -21,7 +21,7 @@ class MegatronCritic(MegatronWorker):
         self.model = self.provider.provide_distributed_model(
             ddp_config=self.ddp_config,
             wrap_with_ddp=True
-        ) # TODO: make value model
+        ) # TODO(P0): make value model
         self.prepare_model_optimizer()
 
     @time_logger("compute_values")

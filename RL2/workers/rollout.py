@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 import requests
 import importlib
+from copy import deepcopy
 from collections import defaultdict
 import torch
 import torch.distributed as dist
@@ -12,7 +13,6 @@ from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
-from tqdm.asyncio import tqdm
 import wandb
 from RL2.datasets import get_tensor_dict, pack_tensor_dicts
 from RL2.utils.sglang import (
@@ -20,7 +20,11 @@ from RL2.utils.sglang import (
     launch_server_process,
     launch_router_process
 )
-from RL2.utils.logging import time_logger, gather_and_log
+from RL2.utils.logging import (
+    progress_bar,
+    time_logger,
+    gather_and_log
+)
 
 
 class Rollout:
@@ -31,7 +35,7 @@ class Rollout:
         self.prepare_device_mesh()
         prepare_environment_variables(self.device_mesh["tp"].get_group())
         if self.device_mesh["tp"].get_local_rank() == 0:
-            # TODO (P0): serve multiple models
+            # TODO: serve multiple models
             self.worker_url = launch_server_process(config.server_args)
             worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())
@@ -78,39 +82,50 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
-    def make_request(self, endpoint, method="POST", payload=None):
+    def make_request(
+        self,
+        endpoint,
+        method="POST",
+        payload=None,
+        max_trials=3,
+        retry_delay=1
+    ):
 
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            while True:
-                try:
-                    if method == "POST":
-                        response = requests.post(
-                            f"{self.worker_url}/{endpoint}",
-                            json=payload or {}
-                        )
-                    elif method == "GET":
-                        response = requests.get(
-                            f"{self.worker_url}/{endpoint}"
-                        )
-                    else:
-                        raise NotImplementedError
-                    response.raise_for_status()
-                    return
-                except NotImplementedError:
-                    raise
-                except:
-                    time.sleep(1)
+        if self.device_mesh["tp"].get_local_rank() != 0:
+            return
+            
+        for _ in range(max_trials):
+            try:
+                if method == "POST":
+                    response = requests.post(
+                        f"{self.worker_url}/{endpoint}",
+                        json=payload or {}
+                    )
+                elif method == "GET":
+                    response = requests.get(
+                        f"{self.worker_url}/{endpoint}"
+                    )
+                response.raise_for_status()
+                return response
+            except:
+                time.sleep(retry_delay)
 
-    async def async_generate(self, states, sampling_params):
+    async def async_generate(
+        self,
+        states,
+        train,
+        max_trials=3,
+        retry_delay=1
+    ):
         
         payload = {
             "input_ids": states,
-            "sampling_params": sampling_params,
+            "sampling_params": self.train_sampling_params if train else self.test_sampling_params,
             "return_logprob": True
         }
 
         async with aiohttp.ClientSession() as session:
-            while True:
+            for _ in range(max_trials):
                 try:
                     async with session.post(
                         f"{self.router_url}/generate",
@@ -118,7 +133,7 @@ class Rollout:
                     ) as response:
                         return await response.json(content_type=None)
                 except:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(retry_delay)
         
     async def rollout(self, data, train):
 
@@ -153,13 +168,11 @@ class Rollout:
         env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
-        scores = []
+        rewards, scores = [], []
         for turn in range(1, self.config.max_turns + 1):
 
             llm_response = await self.async_generate(
-                state_dict["states"],
-                self.train_sampling_params
-                if train else self.test_sampling_params
+                state_dict["states"], train
             )
 
             action_text = llm_response["text"]
@@ -178,6 +191,7 @@ class Rollout:
             metric["length_clip_ratio"].append(
                 meta_info["finish_reason"]["type"] == "length"
             )
+            rewards.append(env_response["reward"])
             scores.append(env_response["score"])
 
             if turn == self.config.max_turns or env_response["done"]:
@@ -195,31 +209,57 @@ class Rollout:
             state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
+        metric["reward"].append(sum(rewards))
         metric["scores"].append(sum(scores))
 
         return tensor_dicts, metric
 
+    async def group_rollout(self, data, train):
+
+        outputs = await asyncio.gather(
+            *(
+                self.rollout(deepcopy(data), train)
+                for _ in range(
+                    self.config.responses_per_prompt
+                    if train else 1
+                )
+            )
+        )
+        all_tensor_dicts, metrics = map(list, zip(*outputs))
+        return all_tensor_dicts, metrics
+
     @time_logger("rollout")
-    def __call__(self, data_list, train: bool, step: int):
+    async def __call__(self, dataloader, train: bool, step: int):
 
         if dist.get_rank() == 0:
 
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            outputs = loop.run_until_complete(
-                tqdm.gather(
-                    *(self.rollout(data, train) for data in data_list),
-                    desc="Rollout",
-                    position=1,
-                    leave=False,
-                    disable=(dist.get_rank() != 0)
-                )
+            prompts_per_rollout = (
+                self.config.train_prompts_per_rollout if train else
+                self.config.test_prompts_per_rollout or len(dataloader)
             )
+            tbar = progress_bar(
+                total=prompts_per_rollout, desc="Rollout"
+            )
+            all_tensor_dicts, metrics, pendings = [], [], set()
+            while len(all_tensor_dicts) < prompts_per_rollout:
+                if train or len(all_tensor_dicts) == 0:
+                    for data in dataloader(
+                        prompts_per_rollout - len(pendings)
+                    ):
+                        pendings.add(
+                            asyncio.create_task(
+                                self.group_rollout(data, train)
+                            )
+                        )
+                done, pendings = await asyncio.wait(
+                    pendings, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    all_tensor_dicts_delta, metrics_delta = task.result()
+                    all_tensor_dicts.extend(all_tensor_dicts_delta)
+                    metrics.extend(metrics_delta)
+                tbar.update(len(done))
 
-            all_tensor_dicts, metrics = map(list, zip(*outputs))
             suffix = "train" if train else "test"
             metrics = {
                 f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
@@ -229,42 +269,43 @@ class Rollout:
 
         dist.barrier()
 
+        self.make_request("abort_request", payload={"abort_all": True})
+
         if not train:
             return
 
         self.make_request("release_memory_occupation")
 
-        if dist.get_rank() == 0:
+        if dist.get_rank() != 0:
+            return None, None
 
-            group_size = self.config.responses_per_prompt
-            if group_size > 1 and self.config.dynamic_filtering:
+        group_size = self.config.responses_per_prompt
+        if group_size > 1 and self.config.dynamic_filtering:
 
-                rewards = torch.FloatTensor([
-                    sum([td["rewards"].sum().item() for td in tensor_dicts])
-                    for tensor_dicts in all_tensor_dicts
-                ]).view(-1, group_size)
-                are_filtered = rewards.std(-1) == 0
-                all_tensor_dicts = sum([
-                    all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
-                    for idx, is_filtered in enumerate(are_filtered)
-                    if not is_filtered
-                ], [])
-                wandb.log({
-                    "dynamic_filtering_ratio": are_filtered.float().mean().item()
-                }, step=step)
+            rewards = torch.FloatTensor([
+                sum([td["rewards"].sum().item() for td in tensor_dicts])
+                for tensor_dicts in all_tensor_dicts
+            ]).view(-1, group_size)
+            are_filtered = rewards.std(-1) == 0
+            all_tensor_dicts = sum([
+                all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
+                for idx, is_filtered in enumerate(are_filtered)
+                if not is_filtered
+            ], [])
+            wandb.log({
+                "dynamic_filtering_ratio": are_filtered.float().mean().item()
+            }, step=step)
 
-            tensor_dicts = sum(all_tensor_dicts, [])
-            tensor_dict = pack_tensor_dicts(tensor_dicts)
-            seqs = torch.LongTensor([
-                len(tensor_dicts) for tensor_dicts in all_tensor_dicts
-            ])
-            cu_seqs = torch.cumsum(
-                torch.cat((torch.LongTensor([0]), seqs)), dim=0
-            )
-            
-            return tensor_dict, cu_seqs
-
-        return None, None
+        tensor_dicts = sum(all_tensor_dicts, [])
+        tensor_dict = pack_tensor_dicts(tensor_dicts)
+        seqs = torch.LongTensor([
+            len(tensor_dicts) for tensor_dicts in all_tensor_dicts
+        ])
+        cu_seqs = torch.cumsum(
+            torch.cat((torch.LongTensor([0]), seqs)), dim=0
+        )
+        
+        return tensor_dict, cu_seqs
     
     @torch.no_grad()
     def update(self, named_tensor_generator):

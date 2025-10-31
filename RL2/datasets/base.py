@@ -56,7 +56,7 @@ class BaseDataset(Dataset):
         
         # TODO: support concatnating multiple datasets
         if not config.path:
-            self.dataset = [{} for _ in range(config.prompts_per_rollout)] # for Gym like environments
+            self.dataset = [{} for _ in range(42)] # for Gym like environments
         else:
             if "@" in config.path:
                 split, path = config.path.split("@")
@@ -124,11 +124,39 @@ class BaseDataset(Dataset):
         return len(self.dataset)
 
 
-def get_dataloader(dataset, batch_size):
-    return StatefulDataLoader(
-        dataset,
-        batch_size,
-        shuffle=True,
-        drop_last=True,
-        collate_fn=dataset.collate_fn
-    )
+class StatefulCycleDataLoader(StatefulDataLoader):
+
+    def __call__(self, batch_size=None):
+        
+        if not hasattr(self, "iterator"):
+            self.iterator = iter(self)
+
+        data_list = []
+        for _ in range(batch_size or len(self)):
+            try:
+                data = next(self.iterator)
+            except StopIteration:
+                self.iterator = iter(self)
+                data = next(self.iterator)
+            data_list.append(data)
+        return data_list
+
+
+def get_dataloader(dataset, batch_size=None):
+
+    kwargs = {
+        "dataset": dataset,
+        "shuffle": True,
+        "drop_last": True
+    }
+    if batch_size is None:
+        return StatefulCycleDataLoader(
+            batch_size=1,
+            **kwargs
+        )
+    else:
+        return StatefulDataLoader(
+            batch_size=batch_size,
+            collate_fn=dataset.collate_fn,
+            **kwargs
+        )
