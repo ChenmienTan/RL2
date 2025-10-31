@@ -68,7 +68,7 @@ adv:
   estimator: reinforce # `reinforce` or `gae`
   gamma: 1.0
   lamda: 1.0
-  responses_per_prompt: ${train_data.responses_per_prompt}
+  responses_per_prompt: ${rollout.responses_per_prompt}
   global_norm: false
   norm_var: false
   
