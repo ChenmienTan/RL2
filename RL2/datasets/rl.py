@@ -19,3 +19,6 @@ class RLDataset(BaseDataset):
 
         data["extra_info"] = ex.get("extra_info", {})
         return data
+    
+    def collate_fn(self, batch):
+        return batch[0]

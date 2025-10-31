@@ -147,7 +147,8 @@ def get_dataloader(dataset, batch_size=None):
     kwargs = {
         "dataset": dataset,
         "shuffle": True,
-        "drop_last": True
+        "drop_last": True,
+        "collate_fn": dataset.collate_fn
     }
     if batch_size is None:
         return StatefulCycleDataLoader(
@@ -157,6 +158,5 @@ def get_dataloader(dataset, batch_size=None):
     else:
         return StatefulDataLoader(
             batch_size=batch_size,
-            collate_fn=dataset.collate_fn,
             **kwargs
         )
