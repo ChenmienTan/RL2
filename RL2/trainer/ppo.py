@@ -26,14 +26,14 @@ class PPOTrainer(Trainer):
         self.train_dataloader = self.get_dataloader(True)
         self.test_dataloader = self.get_dataloader(False)
         self.actor.prepare_scheduler(
-            self.config.trainer.n_epochs * len(self.train_dataloader)
+            self.config.trainer.total_steps
         )
         if config.actor.kl.coef > 0:
             self.ref_actor = initialize_actor(config.ref_actor, False)
         if config.adv.estimator == "gae":
             self.critic = initialize_critic(config.critic)
             self.critic.prepare_scheduler(
-                self.config.trainer.n_epochs * len(self.train_dataloader)
+                self.config.trainer.total_steps
             )
         self.rollout = initialize_rollout(config.rollout)    
 
@@ -61,7 +61,7 @@ class PPOTrainer(Trainer):
             "actor/kl": (approx_kl.sum() / tensor_dict["action_mask"].sum()).item()
         }, step=step)
             
-    async def train(self):
+    def train(self):
 
         initial = self.load_ckpt(
             (self.actor, self.critic)
@@ -70,12 +70,14 @@ class PPOTrainer(Trainer):
         )
         for step in trange(
             1,
-            self.config.trainer.total_steps,
+            self.config.trainer.total_steps + 1,
             disable=(dist.get_rank() != 0),
             initial=initial
         ):
 
-            tensor_dict, cu_seqs = await self.rollout(self.train_dataloader, True, step)
+            tensor_dict, cu_seqs = asyncio.run(
+                self.rollout(self.train_dataloader, True, step)
+            )
 
             if self.config.actor.kl.coef > 0:
                 tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
@@ -101,7 +103,9 @@ class PPOTrainer(Trainer):
 
             self.actor.update_rollout(self.rollout, step)
             if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
-                await self.rollout(self.test_dataloader, False, step)
+                asyncio.run(
+                    self.rollout(self.test_dataloader, False, step)
+                )
 
         self.save_model(
             (self.actor, self.critic)
@@ -111,7 +115,7 @@ class PPOTrainer(Trainer):
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
-async def main(config):
+def main(config):
 
     initialize_global_process_group()
     
@@ -121,4 +125,4 @@ async def main(config):
     dist.destroy_process_group()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
