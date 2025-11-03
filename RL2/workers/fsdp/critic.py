@@ -1,3 +1,5 @@
+from typing import Dict, Optional
+from omegaconf import DictConfig
 from collections import defaultdict
 import torch
 from transformers import  AutoModelForTokenClassification
@@ -17,7 +19,7 @@ from RL2.utils.logging import (
 
 class FSDPCritic(FSDPWorker):
 
-    def __init__(self, config):
+    def __init__(self, config: DictConfig):
         super().__init__(config, True)
 
         with self.init_weight_context():
@@ -30,7 +32,11 @@ class FSDPCritic(FSDPWorker):
 
         self.prepare_model_optimizer()
 
-    def forward(self, minibatch, prefix=None):
+    def forward(
+        self,
+        minibatch: Dict[str, torch.Tensor],
+        prefix: str = ""
+    ) -> Dict[str, torch.Tensor]:
 
         minibatch, cu_seqlens = slide_along_cp(
             minibatch,
@@ -41,8 +47,7 @@ class FSDPCritic(FSDPWorker):
             self.device_mesh["cp"].get_group(),
             cu_seqlens
         )
-        key = f"{prefix}_values" if prefix else "values"
-        minibatch[key] = self.model(
+        minibatch[f"{prefix}values"] = self.model(
             input_ids=minibatch["states"],
             position_ids=minibatch["position_ids"],
             use_cache=False
@@ -55,21 +60,29 @@ class FSDPCritic(FSDPWorker):
 
     @time_logger("compute_values")
     @torch.no_grad()
-    def compute_values(self, tensor_dict, step):
+    def compute_values(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ) -> Optional[Dict[str, torch.Tensor]]:
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_device(torch.cuda.current_device())
 
         self.model.eval()
         processed_minibatches = []
         for minibatch in progress_bar(minibatches, desc="Compute values"):
-            processed_minibatch = self.forward(minibatch, "old")
+            processed_minibatch = self.forward(minibatch, "old_")
             processed_minibatches.append(processed_minibatch)
 
         self.load_model_to_device("cpu")
         return self.gather_data(processed_minibatches)
 
     @time_logger("update_critic")
-    def rm_update(self, tensor_dict, step):
+    def rm_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
@@ -92,7 +105,11 @@ class FSDPCritic(FSDPWorker):
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
     @time_logger("update_critic")
-    def ppo_update(self, tensor_dict, step: int):
+    def ppo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_device(torch.cuda.current_device())
 

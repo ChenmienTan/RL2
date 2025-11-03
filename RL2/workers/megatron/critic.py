@@ -1,3 +1,5 @@
+from typing import Dict, Optional, Tuple, List
+from omegaconf import DictConfig
 from collections import defaultdict
 import torch
 from megatron.core import parallel_state as mpu
@@ -15,7 +17,7 @@ from RL2.utils.logging import (
 
 class MegatronCritic(MegatronWorker):
     
-    def __init__(self, config):
+    def __init__(self, config: DictConfig):
         super().__init__(config, True)
 
         self.model = self.provider.provide_distributed_model(
@@ -26,13 +28,22 @@ class MegatronCritic(MegatronWorker):
 
     @time_logger("compute_values")
     @torch.no_grad()
-    def compute_values(self, tensor_dict, step):
+    def compute_values(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ) -> Optional[Dict[str, torch.Tensor]]:
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_gpu()
 
         for model in self.model:
             model.eval()
-        def f(minibatch, cu_seqlens, logits, non_loss_data=True):
+        def f(
+            minibatch: Dict[str, torch.Tensor],
+            cu_seqlens: torch.Tensor,
+            logits: torch.Tensor,
+            non_loss_data: bool = True
+        ) -> Dict[str, torch.Tensor]:
 
             minibatch["old_values"] = logits.squeeze(-1) * minibatch["action_mask"]
             return gather_along_cp(
@@ -47,14 +58,22 @@ class MegatronCritic(MegatronWorker):
         return self.gather_data(minibatches)
 
     @time_logger("update_critic")
-    def rm_update(self, tensor_dict, step):
+    def rm_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
             minibatches, "eos_mask", mpu.get_data_parallel_group()
         ) // 2
         
-        def f(minibatch, cu_seqlens, logits):
+        def f(
+            minibatch: Dict[str, torch.Tensor],
+            cu_seqlens: torch.Tensor,
+            logits: torch.Tensor
+        ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             minibatch["values"] = logits.squeeze(-1) * minibatch["action_mask"]
             minibatch = gather_along_cp(
@@ -72,7 +91,11 @@ class MegatronCritic(MegatronWorker):
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_critic")
-    def ppo_update(self, tensor_dict, step):
+    def ppo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
         self.load_model_to_gpu()
 
@@ -87,7 +110,11 @@ class MegatronCritic(MegatronWorker):
                 mpu.get_data_parallel_group()
             )
 
-            def f(minibatch, cu_seqlens, logits):
+            def f(
+                minibatch: Dict[str, torch.Tensor],
+                cu_seqlens: torch.Tensor,
+                logits: torch.Tensor
+            ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
                 minibatch["values"] = logits.squeeze(-1) * minibatch["action_mask"]
                 minibatch = gather_along_cp(

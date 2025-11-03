@@ -1,59 +1,71 @@
-from omegaconf import OmegaConf
+from typing import Optional, Dict, Any, List, Tuple, Generator
+from omegaconf import OmegaConf, DictConfig
+import os
 import time
 import base64
 import asyncio
 import aiohttp
 import requests
 import importlib
+import multiprocessing
 from copy import deepcopy
 from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
+from sglang.srt.server_args import ServerArgs
+from sglang.srt.entrypoints.http_server_engine import launch_server_process
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
+from sglang_router.launch_router import RouterArgs, launch_router
 import wandb
-from RL2.datasets import get_tensor_dict, pack_tensor_dicts
-from RL2.utils.sglang import (
-    prepare_environment_variables,
-    launch_server_process,
-    launch_router_process
+from RL2.datasets import (
+    get_tensor_dict,
+    pack_tensor_dicts,
+    StatefulCycleDataLoader
 )
+from RL2.utils.communication import get_host, get_available_port
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
     gather_and_log
 )
 
+try:
+    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+except ImportError: # older version of SGLang
+    from sglang.srt.patch_torch import monkey_patch_torch_reductions
+
 
 class Rollout:
 
-    def __init__(self, config):
+    def __init__(self, config: DictConfig):
         
         self.config = config
-        self.prepare_device_mesh()
-        prepare_environment_variables(self.device_mesh["tp"].get_group())
+        self._prepare_device_mesh()
+        self._prepare_environment_variables()
+
         if self.device_mesh["tp"].get_local_rank() == 0:
-            # TODO: serve multiple models
-            self.worker_url = launch_server_process(config.server_args)
-            worker_urls = [
+
+            self._launch_server_process()
+            self.worker_urls = [
                 None for _ in range(self.device_mesh["dp"].size())
             ] if self.device_mesh["dp"].get_local_rank() == 0 else None
             dist.gather_object(
                 self.worker_url,
-                worker_urls,
+                self.worker_urls,
                 group_dst=0,
                 group=self.device_mesh["dp"].get_group(),
             )
         
         if dist.get_rank() == 0:
 
-            self.prepare_environment()
+            self._prepare_environment()
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            self.router_url = launch_router_process(worker_urls)
+            self._launch_router_process()
 
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
@@ -62,19 +74,39 @@ class Rollout:
                 config.test_sampling_params
             )
 
-    def prepare_device_mesh(self):
+    def _prepare_device_mesh(self):
 
         world_size = dist.get_world_size()
-        assert world_size % self.config.server_args.tp_size == 0, \
-            f"World_size {world_size} must be divisible by tp_size {self.config.server_args.tp_size}."
-        self.dp_size = world_size // self.config.server_args.tp_size
+        tp_size = self.config.server_args.tp_size
+        assert world_size % tp_size == 0, \
+            f"World_size {world_size} must be divisible by tp_size {tp_size}."
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cpu",
             mesh_dim_names=("dp", "tp"),
-            mesh_shape=(self.dp_size, self.config.server_args.tp_size)
+            mesh_shape=(world_size // tp_size, tp_size)
         )
 
-    def prepare_environment(self):
+    def _prepare_environment_variables(self):
+
+        # TODO: check whether this is required
+        if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
+            del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
+        monkey_patch_torch_reductions()
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        if cuda_visible_devices:
+            cuda_visible_devices = cuda_visible_devices.split(",")
+            cuda_visible_device = cuda_visible_devices[int(os.environ["LOCAL_RANK"])]
+        else:
+            cuda_visible_device = os.environ["LOCAL_RANK"]
+        cuda_visible_devices = self.device_mesh["tp"].size() * [None]
+        dist.all_gather_object(
+            cuda_visible_devices,
+            cuda_visible_device,
+            self.device_mesh["tp"].get_group(),
+        )
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
+
+    def _prepare_environment(self):
 
         spec = importlib.util.spec_from_file_location(
             "custom_module", self.config.env_path
@@ -82,14 +114,45 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
-    def make_request(
+    def _launch_server_process(self):
+
+        server_args = OmegaConf.to_container(self.config.server_args)
+        server_args = ServerArgs(
+            enable_memory_saver=True,
+            host=get_host(),
+            port=get_available_port(),
+            log_level="error",
+            **server_args
+        ) # TODO: how to disable abort messages?
+        self.worker_url = server_args.url()
+        launch_server_process(server_args)
+
+    def _launch_router_process(self):
+
+        router_args = RouterArgs(
+            worker_urls=self.worker_urls,
+            policy="cache_aware",
+            host=get_host(),
+            port=get_available_port(),
+            log_level="error"
+        )
+        self.router_url = f"http://{router_args.host}:{router_args.port}"
+        process = multiprocessing.Process(
+            target=launch_router, args=(router_args,)
+        )
+        process.start()
+        time.sleep(3)
+        assert process.is_alive()
+
+    def _make_request(
         self,
-        endpoint,
-        method="POST",
-        payload=None,
-        max_trials=3,
-        retry_delay=1
-    ):
+        endpoint: str,
+        url: Optional[str] = None,
+        method: str = "POST",
+        payload: Dict[str, Any] = {},
+        max_trials: int = 3,
+        retry_delay: int = 1
+    ) -> Dict[str, Any]:
 
         if self.device_mesh["tp"].get_local_rank() != 0:
             return
@@ -98,25 +161,25 @@ class Rollout:
             try:
                 if method == "POST":
                     response = requests.post(
-                        f"{self.worker_url}/{endpoint}",
-                        json=payload or {}
+                        f"{url or self.worker_url}/{endpoint}",
+                        json=payload
                     )
                 elif method == "GET":
                     response = requests.get(
-                        f"{self.worker_url}/{endpoint}"
+                        f"{url or self.worker_url}/{endpoint}"
                     )
                 response.raise_for_status()
                 return response
             except:
                 time.sleep(retry_delay)
 
-    async def async_generate(
+    async def _async_generate(
         self,
-        states,
-        train,
-        max_trials=3,
-        retry_delay=1
-    ):
+        states: List[int],
+        train: bool,
+        max_trials: int = 3,
+        retry_delay: int = 1
+    ) -> Dict[str, Any]:
         
         payload = {
             "input_ids": states,
@@ -135,9 +198,13 @@ class Rollout:
                 except:
                     await asyncio.sleep(retry_delay)
         
-    async def rollout(self, data, train):
+    async def _rollout(
+        self,
+        data: Dict[str, Any],
+        train: bool
+    ) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[float]]]:
 
-        def initialize_state_dict(state_text):
+        def _initialize_state_dict(state_text: str) -> Dict[str, List[int]]:
             states = self.tokenizer.encode(state_text, add_special_tokens=False)
             return {
                 "states": states,
@@ -147,7 +214,9 @@ class Rollout:
                 "rewards": len(states) * [0]
             }
 
-        def state_dict_to_tensor_dict(state_dict):
+        def _state_dict_to_tensor_dict(
+            state_dict: Dict[str, List[int]]
+        ) -> Dict[str, torch.Tensor]:
 
             tensor_dict = get_tensor_dict(
                 state_dict["states"],
@@ -164,48 +233,46 @@ class Rollout:
             state_text, data["extra_info"] = await self.env.reset(
                 data["extra_info"]
             )
-        state_dict = initialize_state_dict(state_text)
+        state_dict = _initialize_state_dict(state_text)
         env_response = {"extra_info": data["extra_info"]}
         tensor_dicts = []
         metric = defaultdict(list)
         rewards, scores = [], []
         for turn in range(1, self.config.max_turns + 1):
 
-            llm_response = await self.async_generate(
+            llm_response = await self._async_generate(
                 state_dict["states"], train
             )
-
-            action_text = llm_response["text"]
-            env_response = await self.env.step(
-                state_text, action_text, env_response["extra_info"]
-            )
-
             meta_info = llm_response["meta_info"]
             logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
             state_dict["states"].extend(action)
             state_dict["actions"].extend(action)
             state_dict["action_mask"].extend(len(action) * [1])
             state_dict["logps"].extend(logp)
-            state_dict["rewards"].extend((len(action) - 1) * [0] + [env_response["reward"]])
             metric["response_length"].append(meta_info["completion_tokens"])
             metric["length_clip_ratio"].append(
                 meta_info["finish_reason"]["type"] == "length"
             )
+
+            action_text = llm_response["text"]
+            env_response = await self.env.step(
+                state_text, action_text, env_response["extra_info"]
+            )
+            state_dict["rewards"].extend((len(action) - 1) * [0] + [env_response["reward"]])
             rewards.append(env_response["reward"])
             scores.append(env_response["score"])
-
             if turn == self.config.max_turns or env_response["done"]:
-                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
+                tensor_dicts.append(_state_dict_to_tensor_dict(state_dict))
                 break
             if env_response["next_state"].startswith(state_text + action_text):
-                state_dict_delta = initialize_state_dict(
+                state_dict_delta = _initialize_state_dict(
                     env_response["next_state"][len(state_text + action_text):]
                 )
                 for k, v in state_dict_delta.items():
                     state_dict[k].extend(v)
             else:
-                tensor_dicts.append(state_dict_to_tensor_dict(state_dict))
-                state_dict = initialize_state_dict(env_response["next_state"])
+                tensor_dicts.append(_state_dict_to_tensor_dict(state_dict))
+                state_dict = _initialize_state_dict(env_response["next_state"])
             state_text = env_response["next_state"]
 
         metric["n_turns"].append(turn)
@@ -214,11 +281,15 @@ class Rollout:
 
         return tensor_dicts, metric
 
-    async def group_rollout(self, data, train):
+    async def _group_rollout(
+        self,
+        data: Dict[str, Any],
+        train: bool
+    ) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, List[float]]]]:
 
         outputs = await asyncio.gather(
             *(
-                self.rollout(deepcopy(data), train)
+                self._rollout(deepcopy(data), train)
                 for _ in range(
                     self.config.responses_per_prompt
                     if train else 1
@@ -229,7 +300,12 @@ class Rollout:
         return all_tensor_dicts, metrics
 
     @time_logger("rollout")
-    async def __call__(self, dataloader, train: bool, step: int):
+    async def __call__(
+        self,
+        dataloader: StatefulCycleDataLoader,
+        train: bool,
+        step: int
+    ) -> Optional[Tuple[Optional[Dict[str, torch.Tensor]], Optional[torch.Tensor]]]:
 
         if dist.get_rank() == 0:
 
@@ -259,14 +335,19 @@ class Rollout:
                     if num_tasks_to_finish > 0:
                         tbar.update()
                         num_tasks_to_finish -= 1
-                        first_iter = False
+                        first_iter = False # TODO: print when first_iter is True
                         all_tensor_dicts_delta, metrics_delta = task.result()
                         all_tensor_dicts.extend(all_tensor_dicts_delta)
                         metrics.extend(metrics_delta)
 
-            for task in pendings:
-                task.cancel()
-            await asyncio.gather(*pendings, return_exceptions=True)
+            while pendings:
+                for worker_url in self.worker_urls:
+                    self._make_request(
+                        "pause_generation", url=worker_url
+                    )
+                done, pendings = await asyncio.wait(
+                    pendings, timeout=1
+                )
 
             suffix = "train" if train else "test"
             metrics = {
@@ -277,14 +358,10 @@ class Rollout:
 
         dist.barrier()
 
-        for _ in range(10):
-            self.make_request("abort_request", payload={"abort_all": True})
-            time.sleep(0.1)
-
         if not train:
             return
 
-        self.make_request("release_memory_occupation")
+        self._make_request("release_memory_occupation")
 
         if dist.get_rank() != 0:
             return None, None
@@ -306,8 +383,8 @@ class Rollout:
                 "dynamic_filtering_ratio": are_filtered.float().mean().item()
             }, step=step)
 
-        tensor_dicts = sum(all_tensor_dicts, [])
-        tensor_dict = pack_tensor_dicts(tensor_dicts)
+        tensor_dicts: List[Dict[str, torch.Tensor]] = sum(all_tensor_dicts, [])
+        tensor_dict: Dict[str, torch.Tensor] = pack_tensor_dicts(tensor_dicts)
         seqs = torch.LongTensor([
             len(tensor_dicts) for tensor_dicts in all_tensor_dicts
         ])
@@ -318,12 +395,15 @@ class Rollout:
         return tensor_dict, cu_seqs
     
     @torch.no_grad()
-    def update(self, named_tensor_generator):
+    def update(self, named_tensor_generator: Generator[Tuple[str, torch.Tensor]]):
 
         torch.cuda.empty_cache()
         dist.barrier()
         # or resume_memory_occupation() may OOM
-        self.make_request("resume_memory_occupation")
+        self._make_request(
+            "resume_memory_occupation",
+            payload={"tags": ["weights"]}
+        )
         
         for name, tensor in named_tensor_generator:
             tensor = tensor.to(torch.cuda.current_device())
@@ -351,9 +431,14 @@ class Rollout:
                     base64.b64encode(snt).decode("utf-8")
                     for snt in serialized_named_tensors
                 ]
-                payload = {
-                    "serialized_named_tensors": serialized_named_tensors,
-                    "flush_cache": False
-                }
-                self.make_request("update_weights_from_tensor", payload=payload)
-        self.make_request("flush_cache", "GET")
+                self._make_request(
+                    "update_weights_from_tensor",
+                    payload={
+                        "serialized_named_tensors": serialized_named_tensors,
+                        "flush_cache": False
+                    }
+                )
+        self._make_request(
+            "resume_memory_occupation",
+            payload={"tags": ["kv_cache"]}
+        )

@@ -1,8 +1,10 @@
-from omegaconf import OmegaConf
+from typing import Dict, Union, List, Optional, Callable, Tuple, Iterator, Any
+from omegaconf import OmegaConf, DictConfig
 import os
 import gc
 from functools import partial
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 from megatron.core import (
     parallel_state as mpu,
@@ -33,7 +35,7 @@ from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
 
 class MegatronWorker(Worker):
 
-    def __init__(self, config, train: bool):
+    def __init__(self, config: DictConfig, train: bool):
         super().__init__(config, train)
         
         self.bridge = AutoBridge.from_hf_pretrained(config.model_name)
@@ -76,7 +78,7 @@ class MegatronWorker(Worker):
 
         self.offload_model_to_cpu()
 
-    def prepare_scheduler(self, total_steps):
+    def prepare_scheduler(self, total_steps: int):
 
         num_training_steps = total_steps * getattr(
             self.config, "update_per_rollout", 1
@@ -98,10 +100,10 @@ class MegatronWorker(Worker):
 
     def scatter_data(
         self,
-        tensor_dict,
+        tensor_dict: Dict[str, torch.Tensor],
         pack_minibatches: bool = False,
         pair: bool = False
-    ):
+    ) -> Union[List[Dict[str, torch.Tensor]], List[List[Dict[str, torch.Tensor]]]]:
         multiple_of = mpu.get_data_parallel_world_size()
         if mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
             multiple_of *= mpu.get_pipeline_model_parallel_world_size()
@@ -119,7 +121,9 @@ class MegatronWorker(Worker):
             pair
         )
 
-    def gather_data(self, minibatches):
+    def gather_data(
+        self, minibatches: List[Dict[str, torch.Tensor]]
+    ) -> Optional[Dict[str, torch.Tensor]]:
         return gather_data(minibatches, mpu.get_data_parallel_group())
 
     def offload_model_to_cpu(self):
@@ -165,7 +169,7 @@ class MegatronWorker(Worker):
                     )
         gc.collect()
 
-    def load_optimizer_to_device(self, device):
+    def load_optimizer_to_device(self, device: Union[torch.device, str]):
 
         if not getattr(self.config, "offload_optimizer", False):
             return
@@ -187,12 +191,18 @@ class MegatronWorker(Worker):
             gc.collect()
             torch.cuda.empty_cache()
 
-    def scale_loss(self, loss):
+    def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
-    def forward_backward(self, f, minibatches):
+    def forward_backward(
+        self,
+        f: Callable,
+        minibatches: List[Dict[str, torch.Tensor]]
+    ) -> Union[Tuple[Dict[str, List[float]], torch.Tensor], List[Dict[str, torch.Tensor]]]:
 
-        def forward_step(data_iterator, model):
+        def forward_step(
+            data_iterator: Iterator, model: List[Union[DDP, nn.Module]]
+        ) -> Tuple[torch.Tensor, Callable]:
 
             minibatch = next(data_iterator)
             minibatch, cu_seqlens = slide_along_cp(
@@ -256,7 +266,7 @@ class MegatronWorker(Worker):
         else:
             return output
 
-    def get_ckpt(self):
+    def get_ckpt(self) -> Dict[str, Dict[str, Any]]:
 
         ckpt = {}
         for vpp_rank, model in enumerate(self.model):
@@ -273,7 +283,7 @@ class MegatronWorker(Worker):
         }
         return ckpt
 
-    def load_ckpt(self, save_dir):
+    def load_ckpt(self, save_dir: str):
         
         ckpt = self.get_ckpt()
         sharded_strategy = get_default_load_sharded_strategy(save_dir)
@@ -289,7 +299,7 @@ class MegatronWorker(Worker):
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
-    def save_ckpt(self, save_dir):
+    def save_ckpt(self, save_dir: str):
 
         self.save_model(f"{save_dir}/model")
         sharded_strategy = get_default_save_sharded_strategy("torch_dist")
@@ -304,7 +314,7 @@ class MegatronWorker(Worker):
             sharded_strategy=sharded_strategy
         )
 
-    def save_model(self, save_dir):
+    def save_model(self, save_dir: str):
 
         self.load_model_to_gpu()
         self.bridge.save_hf_pretrained(self.model, save_dir)

@@ -1,3 +1,5 @@
+from typing import Dict, Optional
+from omegaconf import DictConfig
 from collections import defaultdict
 import torch
 from transformers import AutoModelForCausalLM
@@ -19,7 +21,7 @@ from RL2.utils.logging import (
 
 class FSDPActor(FSDPWorker):
 
-    def __init__(self, config, train: bool):
+    def __init__(self, config: DictConfig, train: bool):
         super().__init__(config, train)
 
         if config.use_liger_kernel:
@@ -39,7 +41,12 @@ class FSDPActor(FSDPWorker):
 
         self.prepare_model_optimizer()
 
-    def forward(self, minibatch, prefix=None, return_entropy=False):
+    def forward(
+        self,
+        minibatch: Dict[str, torch.Tensor],
+        prefix: str = "",
+        return_entropy: bool = False
+    ) -> Dict[str, torch.Tensor]:
 
         minibatch, cu_seqlens = slide_along_cp(
             minibatch,
@@ -72,7 +79,11 @@ class FSDPActor(FSDPWorker):
 
     @time_logger("compute_logps")
     @torch.no_grad()
-    def compute_logps(self, tensor_dict, step):
+    def compute_logps(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ) -> Optional[Dict[str, torch.Tensor]]:
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_device(torch.cuda.current_device())
 
@@ -90,7 +101,11 @@ class FSDPActor(FSDPWorker):
         return self.gather_data(processed_minibatches)
 
     @time_logger("update_actor")
-    def sft_update(self, tensor_dict, step):
+    def sft_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict)
 
         total_actions, total_sequences = count_total(
@@ -118,7 +133,11 @@ class FSDPActor(FSDPWorker):
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
     @time_logger("update_actor")
-    def dpo_update(self, tensor_dict, step):
+    def dpo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
@@ -141,7 +160,11 @@ class FSDPActor(FSDPWorker):
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
     
     @time_logger("update_actor")
-    def ppo_update(self, tensor_dict, step: int):
+    def ppo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         if step < self.config.freeze_steps:
             return
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)

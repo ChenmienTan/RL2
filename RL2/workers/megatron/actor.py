@@ -1,3 +1,5 @@
+from typing import Dict, Optional, Tuple, List
+from omegaconf import DictConfig
 from collections import defaultdict
 import torch
 from megatron.core import parallel_state as mpu
@@ -17,7 +19,7 @@ from RL2.utils.logging import (
 
 class MegatronActor(MegatronWorker):
     
-    def __init__(self, config, train: bool):
+    def __init__(self, config: DictConfig, train: bool):
         super().__init__(config, train)
 
         self.model = self.provider.provide_distributed_model(
@@ -28,14 +30,23 @@ class MegatronActor(MegatronWorker):
 
     @time_logger("compute_logps")
     @torch.no_grad()
-    def compute_logps(self, tensor_dict, step):
+    def compute_logps(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ) -> Optional[Dict[str, torch.Tensor]]:
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_gpu()
 
         prefix = "old_" if self.train else "ref_"
         for model in self.model:
             model.eval()
-        def f(minibatch, cu_seqlens, logits, non_loss_data=True):
+        def f(
+            minibatch: Dict[str, torch.Tensor],
+            cu_seqlens: torch.Tensor,
+            logits: torch.Tensor,
+            non_loss_data: bool = True
+        ) -> Dict[str, torch.Tensor]:
 
             compute_logps_and_entropy(
                 logits / getattr(self.config, "temperature", 1.0),
@@ -56,7 +67,11 @@ class MegatronActor(MegatronWorker):
         return self.gather_data(minibatches)
 
     @time_logger("update_actor")
-    def sft_update(self, tensor_dict, step):
+    def sft_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict)
 
         total_actions, total_sequences = count_total(
@@ -65,7 +80,11 @@ class MegatronActor(MegatronWorker):
             mpu.get_data_parallel_group()
         )
 
-        def f(minibatch, cu_seqlens, logits):
+        def f(
+            minibatch: Dict[str, torch.Tensor],
+            cu_seqlens: torch.Tensor,
+            logits: torch.Tensor
+        ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             compute_logps_and_entropy(
                 logits,
@@ -91,14 +110,22 @@ class MegatronActor(MegatronWorker):
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
-    def dpo_update(self, tensor_dict, step):
+    def dpo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         minibatches = self.scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
             minibatches, "eos_mask", mpu.get_data_parallel_group()
         ) // 2
 
-        def f(minibatch, cu_seqlens, logits):
+        def f(
+            minibatch: Dict[str, torch.Tensor],
+            cu_seqlens: torch.Tensor,
+            logits: torch.Tensor
+        ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             compute_logps_and_entropy(
                 logits,
@@ -120,7 +147,11 @@ class MegatronActor(MegatronWorker):
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
-    def ppo_update(self, tensor_dict, step):
+    def ppo_update(
+        self,
+        tensor_dict: Optional[Dict[str, torch.Tensor]],
+        step: int
+    ):
         if step < self.config.freeze_steps:
             return
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
@@ -137,7 +168,11 @@ class MegatronActor(MegatronWorker):
                 mpu.get_data_parallel_group()
             )
 
-            def f(minibatch, cu_seqlens, logits):
+            def f(
+                minibatch: Dict[str, torch.Tensor],
+                cu_seqlens: torch.Tensor,
+                logits: torch.Tensor
+            ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
             
                 compute_logps_and_entropy(
                     logits / getattr(self.config, "temperature", 1.0),

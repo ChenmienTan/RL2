@@ -89,7 +89,7 @@ def scatter_data(
     max_length_per_dp: int,
     num_batches: Optional[int] = None,
     pair: bool = False
-) -> List[Dict[str, torch.Tensor]]:
+) -> Union[List[Dict[str, torch.Tensor]], List[List[Dict[str, torch.Tensor]]]]:
 
     if num_batches is not None:
         if dist.get_rank() == 0:
@@ -135,7 +135,7 @@ def scatter_data(
 def gather_data(
     minibatches: List[Dict[str, torch.Tensor]],
     process_group: dist.ProcessGroup
-) -> Dict[str, torch.Tensor]:
+) -> Optional[Dict[str, torch.Tensor]]:
     
     minibatches = [
         {

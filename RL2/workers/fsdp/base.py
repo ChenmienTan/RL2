@@ -1,4 +1,5 @@
-from omegaconf import OmegaConf
+from typing import ContextManager, Dict, Union, List, Optional, Any
+from omegaconf import OmegaConf, DictConfig
 from accelerate import init_empty_weights
 import torch
 from torch.nn.utils import clip_grad_norm_
@@ -18,29 +19,35 @@ from RL2.utils.sequences import scatter_data, gather_data
 
 class FSDPWorker(Worker):
 
-    def __init__(self, config, train):
+    def __init__(self, config: DictConfig, train: bool):
         super().__init__(config, train)
 
         world_size = dist.get_world_size()
         assert world_size % (config.ddp_size * config.tp_size) == 0, \
             f"World_size {world_size} must be divisible by ddp_size {config.ddp_size} * tp_size {config.tp_size}."
-        self.fsdp_size = world_size // (config.ddp_size * config.tp_size)
         self.model_device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("ddp", "fsdp", "tp"),
-            mesh_shape=(config.ddp_size, self.fsdp_size, config.tp_size)
+            mesh_shape=(
+                config.ddp_size,
+                world_size // (config.ddp_size * config.tp_size),
+                config.tp_size
+            )
         )
 
         assert world_size % (config.cp_size * config.tp_size) == 0, \
             f"World_size {world_size} must be divisible by cp_size {config.cp_size} * tp_size {config.tp_size}."
-        self.dp_size = world_size // (config.cp_size * config.tp_size)
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cuda",
             mesh_dim_names=("dp", "cp", "tp"),
-            mesh_shape=(self.dp_size, config.cp_size, config.tp_size)
+            mesh_shape=(
+                world_size // (config.cp_size * config.tp_size),
+                config.cp_size,
+                config.tp_size
+            )
         )
 
-    def init_weight_context(self):
+    def init_weight_context(self) -> ContextManager:
         # TODO: why offloading is incompatible with initialization on meta device?
         if any([
             dist.get_rank() == 0,
@@ -75,7 +82,7 @@ class FSDPWorker(Worker):
 
         self.load_model_to_device("cpu")
     
-    def prepare_scheduler(self, total_steps):
+    def prepare_scheduler(self, total_steps: int):
 
         num_training_steps = total_steps * getattr(
             self.config, "update_per_rollout", 1
@@ -90,10 +97,10 @@ class FSDPWorker(Worker):
 
     def scatter_data(
         self,
-        tensor_dict,
+        tensor_dict: Dict[str, torch.Tensor],
         pack_minibatches: bool = False,
         pair: bool = False
-    ):
+    ) -> Union[List[Dict[str, torch.Tensor]], List[List[Dict[str, torch.Tensor]]]]:
 
         max_length_per_dp = self.device_mesh["cp"].size() * self.device_mesh["tp"].size() * (
             self.config.max_length_per_device
@@ -109,10 +116,12 @@ class FSDPWorker(Worker):
             pair
         )
 
-    def gather_data(self, minibatches):
+    def gather_data(
+        self, minibatches: List[Dict[str, torch.Tensor]]
+    ) -> Optional[Dict[str, torch.Tensor]]:
         return gather_data(minibatches, self.device_mesh["dp"].get_group())
 
-    def load_model_to_device(self, device):
+    def load_model_to_device(self, device: Union[torch.device, str]):
     
         if not getattr(self.config, "offload_model", False):
             return
@@ -127,7 +136,7 @@ class FSDPWorker(Worker):
             flat_param._local_shard = flat_param.data
         torch.cuda.empty_cache()
 
-    def load_optimizer_to_device(self, device):
+    def load_optimizer_to_device(self, device: Union[torch.device, str]):
 
         if not getattr(self.config, "offload_optimizer", False):
             return
@@ -141,11 +150,11 @@ class FSDPWorker(Worker):
                             device, non_blocking=True
                         )
 
-    def scale_loss(self, loss):
+    def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         # https://github.com/ChenmienTan/RL2/issues/11
         return self.dp_size * self.config.cp_size * loss
     
-    def optimizer_step(self):
+    def optimizer_step(self) -> int:
 
         grad_norm = clip_grad_norm_(
             self.model.parameters(),
@@ -160,7 +169,9 @@ class FSDPWorker(Worker):
         self.scheduler.step()
         return grad_norm.item()
 
-    def get_model_state_dict(self, full_state_dict=False):
+    def get_model_state_dict(
+        self, full_state_dict: bool = False
+    ) -> Dict[str, Any]:
 
         options = StateDictOptions(
             full_state_dict=full_state_dict,
@@ -171,20 +182,20 @@ class FSDPWorker(Worker):
         self.load_model_to_device("cpu")
         return state_dict
 
-    def get_ckpt(self):
+    def get_ckpt(self) -> Dict[str, Dict[str, Any]]:
         return {
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict()
         }
 
-    def load_ckpt(self, checkpoint_id):
+    def load_ckpt(self, checkpoint_id: str):
 
         ckpt = self.get_ckpt()
         dcp.load(ckpt, checkpoint_id=checkpoint_id)
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
-    def save_ckpt(self, save_dir):
+    def save_ckpt(self, save_dir: str):
         
         self.save_model(f"{save_dir}/model")
         dcp.save(
@@ -192,7 +203,7 @@ class FSDPWorker(Worker):
             checkpoint_id=f"{save_dir}/optimizer_scheduler"
         )
 
-    def save_model(self, save_dir):
+    def save_model(self, save_dir: str):
 
         state_dict = self.get_model_state_dict(full_state_dict=True)
         if dist.get_rank() == 0:
