@@ -47,7 +47,7 @@ class FSDPWorker(Worker):
             )
         )
 
-    def init_weight_context(self) -> ContextManager:
+    def _init_weight_context(self) -> ContextManager:
         # TODO: why offloading is incompatible with initialization on meta device?
         if any([
             dist.get_rank() == 0,
@@ -57,7 +57,7 @@ class FSDPWorker(Worker):
             return torch.device("cpu")
         return init_empty_weights()
 
-    def prepare_model_optimizer(self):
+    def _prepare_model_optimizer(self):
 
         if self.train and self.config.enable_gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -80,7 +80,7 @@ class FSDPWorker(Worker):
                 **optimizer_config
             )
 
-        self.load_model_to_device("cpu")
+        self._load_model_to_device("cpu")
     
     def prepare_scheduler(self, total_steps: int):
 
@@ -95,7 +95,7 @@ class FSDPWorker(Worker):
             num_training_steps=num_training_steps
         )
 
-    def scatter_data(
+    def _scatter_data(
         self,
         tensor_dict: Dict[str, torch.Tensor],
         pack_minibatches: bool = False,
@@ -116,12 +116,12 @@ class FSDPWorker(Worker):
             pair
         )
 
-    def gather_data(
+    def _gather_data(
         self, minibatches: List[Dict[str, torch.Tensor]]
     ) -> Optional[Dict[str, torch.Tensor]]:
         return gather_data(minibatches, self.device_mesh["dp"].get_group())
 
-    def load_model_to_device(self, device: Union[torch.device, str]):
+    def _load_model_to_device(self, device: Union[torch.device, str]):
     
         if not getattr(self.config, "offload_model", False):
             return
@@ -136,7 +136,7 @@ class FSDPWorker(Worker):
             flat_param._local_shard = flat_param.data
         torch.cuda.empty_cache()
 
-    def load_optimizer_to_device(self, device: Union[torch.device, str]):
+    def _load_optimizer_to_device(self, device: Union[torch.device, str]):
 
         if not getattr(self.config, "offload_optimizer", False):
             return
@@ -150,26 +150,26 @@ class FSDPWorker(Worker):
                             device, non_blocking=True
                         )
 
-    def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
+    def _scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         # https://github.com/ChenmienTan/RL2/issues/11
         return self.dp_size * self.config.cp_size * loss
     
-    def optimizer_step(self) -> int:
+    def _optimizer_step(self) -> int:
 
         grad_norm = clip_grad_norm_(
             self.model.parameters(),
             max_norm=self.config.max_grad_norm
         )
-        self.load_optimizer_to_device(
+        self._load_optimizer_to_device(
             torch.cuda.current_device()
         )
         self.optimizer.step()
         self.optimizer.zero_grad()
-        self.load_optimizer_to_device("cpu")
+        self._load_optimizer_to_device("cpu")
         self.scheduler.step()
         return grad_norm.item()
 
-    def get_model_state_dict(
+    def _get_model_state_dict(
         self, full_state_dict: bool = False
     ) -> Dict[str, Any]:
 
@@ -177,12 +177,12 @@ class FSDPWorker(Worker):
             full_state_dict=full_state_dict,
             cpu_offload=True
         )
-        self.load_model_to_device(torch.cuda.current_device())
+        self._load_model_to_device(torch.cuda.current_device())
         state_dict = get_model_state_dict(self.model, options=options)
-        self.load_model_to_device("cpu")
+        self._load_model_to_device("cpu")
         return state_dict
 
-    def get_ckpt(self) -> Dict[str, Dict[str, Any]]:
+    def _get_ckpt(self) -> Dict[str, Dict[str, Any]]:
         return {
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict()
@@ -190,7 +190,7 @@ class FSDPWorker(Worker):
 
     def load_ckpt(self, checkpoint_id: str):
 
-        ckpt = self.get_ckpt()
+        ckpt = self._get_ckpt()
         dcp.load(ckpt, checkpoint_id=checkpoint_id)
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.scheduler.load_state_dict(ckpt["scheduler"])
@@ -199,13 +199,13 @@ class FSDPWorker(Worker):
         
         self.save_model(f"{save_dir}/model")
         dcp.save(
-            self.get_ckpt(),
+            self._get_ckpt(),
             checkpoint_id=f"{save_dir}/optimizer_scheduler"
         )
 
     def save_model(self, save_dir: str):
 
-        state_dict = self.get_model_state_dict(full_state_dict=True)
+        state_dict = self._get_model_state_dict(full_state_dict=True)
         if dist.get_rank() == 0:
 
             self.tokenizer.save_pretrained(save_dir)

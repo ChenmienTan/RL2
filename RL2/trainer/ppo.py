@@ -39,10 +39,10 @@ class PPOTrainer(Trainer):
                 self.config.trainer.total_steps
             )
         self.rollout = initialize_rollout(config.rollout)
-        self.train_dataloader = self.get_dataloader(True)
-        self.test_dataloader = self.get_dataloader(False)    
+        self.train_dataloader = self._get_dataloader(True)
+        self.test_dataloader = self._get_dataloader(False)    
 
-    def get_dataloader(self, train: bool) -> StatefulDataLoader:
+    def _get_dataloader(self, train: bool) -> StatefulDataLoader:
 
         dataset = RLDataset(
             self.config.train_data
@@ -53,7 +53,7 @@ class PPOTrainer(Trainer):
         return get_dataloader(dataset)
     
     @time_logger("compute_approx_kl")
-    def compute_approx_kl(
+    def _compute_approx_kl(
         self, tensor_dict: Dict[str, torch.Tensor], step: int
     ):
 
@@ -106,7 +106,7 @@ class PPOTrainer(Trainer):
 
             if dist.get_rank() == 0:
                 if self.config.actor.kl.coef > 0:
-                    self.compute_approx_kl(tensor_dict, step)
+                    self._compute_approx_kl(tensor_dict, step)
                 compute_advantages(self.config.adv, tensor_dict, cu_seqs, step)
 
             self.actor.ppo_update(tensor_dict, step)

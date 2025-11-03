@@ -41,7 +41,7 @@ class Trainer:
             else:
                 wandb.log = lambda *args, **kwargs: None
 
-    def get_ckpt(self, step: int) -> Dict[str, Any]:
+    def _get_ckpt(self, step: int) -> Dict[str, Any]:
         return {
             "step": step,
             "dataloader": self.train_dataloader.state_dict()
@@ -55,7 +55,7 @@ class Trainer:
             worker_name = "actor" if "Actor" in worker.__class__.__name__ else "critic"
             worker.load_ckpt(f"{self.load_dir}/{worker_name}/optimizer_scheduler")
 
-        ckpt = self.get_ckpt(0)
+        ckpt = self._get_ckpt(0)
         dcp.load(ckpt, checkpoint_id=f"{self.load_dir}/trainer")
         self.train_dataloader.load_state_dict(ckpt["dataloader"])
         return ckpt["step"]
@@ -71,7 +71,7 @@ class Trainer:
             worker.save_ckpt(f"{save_dir}/{worker_name}")
 
         dcp.save(
-            self.get_ckpt(step),
+            self._get_ckpt(step),
             checkpoint_id=f"{save_dir}/trainer"
         )
 

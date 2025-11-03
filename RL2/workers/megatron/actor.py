@@ -26,7 +26,7 @@ class MegatronActor(MegatronWorker):
             ddp_config=self.ddp_config,
             wrap_with_ddp=train
         )
-        self.prepare_model_optimizer()
+        self._prepare_model_optimizer()
 
     @time_logger("compute_logps")
     @torch.no_grad()
@@ -35,8 +35,8 @@ class MegatronActor(MegatronWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ) -> Optional[Dict[str, torch.Tensor]]:
-        minibatches = self.scatter_data(tensor_dict)
-        self.load_model_to_gpu()
+        minibatches = self._scatter_data(tensor_dict)
+        self._load_model_to_gpu()
 
         prefix = "old_" if self.train else "ref_"
         for model in self.model:
@@ -60,11 +60,11 @@ class MegatronActor(MegatronWorker):
                 cu_seqlens
             )
         
-        minibatches = self.forward_backward(f, minibatches)
+        minibatches = self._forward_backward(f, minibatches)
 
         if not self.train:
-            self.offload_model_to_cpu()
-        return self.gather_data(minibatches)
+            self._offload_model_to_cpu()
+        return self._gather_data(minibatches)
 
     @time_logger("update_actor")
     def sft_update(
@@ -72,7 +72,7 @@ class MegatronActor(MegatronWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ):
-        minibatches = self.scatter_data(tensor_dict)
+        minibatches = self._scatter_data(tensor_dict)
 
         total_actions, total_sequences = count_total(
             minibatches,
@@ -103,9 +103,9 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            return self.scale_loss(loss), {"loss": [loss.item()]}
+            return self._scale_loss(loss), {"loss": [loss.item()]}
 
-        metrics, grad_norm = self.forward_backward(f, minibatches)
+        metrics, grad_norm = self._forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
@@ -115,7 +115,7 @@ class MegatronActor(MegatronWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ):
-        minibatches = self.scatter_data(tensor_dict, pair=True)
+        minibatches = self._scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
             minibatches, "eos_mask", mpu.get_data_parallel_group()
@@ -140,9 +140,9 @@ class MegatronActor(MegatronWorker):
             losses, metric = dpo_loss(self.config, minibatch)
             loss = losses.sum() / total_pairs
             metric["loss"] = [loss.item()]
-            return self.scale_loss(loss), metric
+            return self._scale_loss(loss), metric
 
-        metrics, grad_norm = self.forward_backward(f, minibatches)
+        metrics, grad_norm = self._forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
@@ -155,7 +155,7 @@ class MegatronActor(MegatronWorker):
         if step < self.config.freeze_steps:
             return
         batches = self.scatter_data(tensor_dict, pack_minibatches=True)
-        self.load_model_to_gpu()
+        self._load_model_to_gpu()
 
         for model in self.model:
             model.train()
@@ -202,9 +202,9 @@ class MegatronActor(MegatronWorker):
                     "actor/clip_ratio": [clip_ratio.item()],
                 }
 
-                return self.scale_loss(loss), metric
+                return self._scale_loss(loss), metric
             
-            metric, grad_norm = self.forward_backward(f, batch)
+            metric, grad_norm = self._forward_backward(f, batch)
             for k, v in metric.items():
                 metrics[k].append(
                     gather_and_reduce(v, mpu.get_data_parallel_group())
@@ -213,14 +213,14 @@ class MegatronActor(MegatronWorker):
 
         rank0_log(metrics, step)
         if self.config.adv_estimator == "gae":
-            self.offload_model_to_cpu()
+            self._offload_model_to_cpu()
 
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):
 
-        self.load_model_to_gpu()
+        self._load_model_to_gpu()
         named_tensor_generator = self.bridge.export_hf_weights(
             self.model, cpu=True
         )
         rollout.update(named_tensor_generator)
-        self.offload_model_to_cpu()
+        self._offload_model_to_cpu()

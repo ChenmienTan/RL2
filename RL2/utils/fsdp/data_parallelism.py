@@ -10,7 +10,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-def param_init_fn(module: nn.Module):
+def _param_init_fn(module: nn.Module):
     module.to_empty(device=torch.cuda.current_device(), recurse=False)
 
 def prepare_dp_model(
@@ -46,7 +46,7 @@ def prepare_dp_model(
         auto_wrap_policy=auto_wrap_policy,
         sharding_strategy=ShardingStrategy.HYBRID_SHARD,
         mixed_precision=mixed_precision,
-        param_init_fn=param_init_fn,
+        param_init_fn=_param_init_fn,
         sync_module_states=sync_module_states,
         device_mesh=device_mesh,
         device_id=torch.cuda.current_device()

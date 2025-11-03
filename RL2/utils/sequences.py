@@ -222,7 +222,7 @@ def slide_along_cp(
 
     cp_rank = dist.get_rank(process_group)
     cp_size = dist.get_world_size(process_group)
-    def slide_tensor_along_cp(tensor: torch.Tensor) -> torch.Tensor:
+    def _slide_tensor_along_cp(tensor: torch.Tensor) -> torch.Tensor:
 
         if len(tensor) % (2 * cp_size) != 0:
             pad_tokens = 2 * cp_size - len(tensor) % (2 * cp_size)
@@ -236,7 +236,7 @@ def slide_along_cp(
     processed_minibatch = {}
     for k, v in minibatch.items():
         tensors = [
-            slide_tensor_along_cp(tensor[:seq_len])
+            _slide_tensor_along_cp(tensor[:seq_len])
             for tensor, seq_len in zip(v, seq_lens)
         ]
         length = sum([len(tensor) for tensor in tensors])

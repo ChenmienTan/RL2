@@ -32,16 +32,16 @@ class FSDPActor(FSDPWorker):
         else:
             model_cls = AutoModelForCausalLM
 
-        with self.init_weight_context():
+        with self._init_weight_context():
             self.model = model_cls.from_pretrained(
                 config.model_name,
                 trust_remote_code=True,
                 attn_implementation="flash_attention_2"
             )
 
-        self.prepare_model_optimizer()
+        self._prepare_model_optimizer()
 
-    def forward(
+    def _forward(
         self,
         minibatch: Dict[str, torch.Tensor],
         prefix: str = "",
@@ -84,8 +84,8 @@ class FSDPActor(FSDPWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ) -> Optional[Dict[str, torch.Tensor]]:
-        minibatches = self.scatter_data(tensor_dict)
-        self.load_model_to_device(torch.cuda.current_device())
+        minibatches = self._scatter_data(tensor_dict)
+        self._load_model_to_device(torch.cuda.current_device())
 
         prefix = "old_" if self.train else "ref_"
         self.model.eval()
@@ -93,12 +93,12 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc=f"Compute {prefix} logps"
         ):
-            processed_minibatch = self.forward(minibatch, prefix)
+            processed_minibatch = self._forward(minibatch, prefix)
             processed_minibatches.append(processed_minibatch)
 
         if not self.train:
-            self.load_model_to_device("cpu")
-        return self.gather_data(processed_minibatches)
+            self._load_model_to_device("cpu")
+        return self._gather_data(processed_minibatches)
 
     @time_logger("update_actor")
     def sft_update(
@@ -106,7 +106,7 @@ class FSDPActor(FSDPWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ):
-        minibatches = self.scatter_data(tensor_dict)
+        minibatches = self._scatter_data(tensor_dict)
 
         total_actions, total_sequences = count_total(
             minibatches,
@@ -117,7 +117,7 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
-            minibatch = self.forward(minibatch)
+            minibatch = self._forward(minibatch)
             loss = aggregate_values(
                 - minibatch["logps"],
                 minibatch["action_mask"],
@@ -125,10 +125,10 @@ class FSDPActor(FSDPWorker):
                 total_actions,
                 total_sequences
             )
-            self.scale_loss(loss).backward()
+            self._scale_loss(loss).backward()
             metrics["loss"].append(loss.item())
 
-        grad_norm = self.optimizer_step()
+        grad_norm = self._optimizer_step()
         metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
@@ -138,7 +138,7 @@ class FSDPActor(FSDPWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ):
-        minibatches = self.scatter_data(tensor_dict, pair=True)
+        minibatches = self._scatter_data(tensor_dict, pair=True)
 
         total_pairs = count_total(
             minibatches, "eos_mask", self.device_mesh["dp"].get_group()
@@ -147,15 +147,15 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
-            minibatch = self.forward(minibatch)
+            minibatch = self._forward(minibatch)
             losses, metric = dpo_loss(self.config, minibatch)
             loss = losses.sum() / total_pairs
-            self.scale_loss(loss).backward()
+            self._scale_loss(loss).backward()
             metric["loss"] = [loss.item()]
             for k, v in metric.items():
                 metrics[k].extend(v)
 
-        grad_norm = self.optimizer_step()
+        grad_norm = self._optimizer_step()
         metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
     
@@ -167,8 +167,8 @@ class FSDPActor(FSDPWorker):
     ):
         if step < self.config.freeze_steps:
             return
-        batches = self.scatter_data(tensor_dict, pack_minibatches=True)
-        self.load_model_to_device(torch.cuda.current_device())
+        batches = self._scatter_data(tensor_dict, pack_minibatches=True)
+        self._load_model_to_device(torch.cuda.current_device())
 
         self.model.train()
         tbar = progress_bar(
@@ -186,7 +186,7 @@ class FSDPActor(FSDPWorker):
             metric = defaultdict(list)
             for minibatch in batch:
 
-                minibatch = self.forward(
+                minibatch = self._forward(
                     minibatch, return_entropy=True
                 )
                 losses, clip_ratios = actor_ppo_loss(self.config, minibatch)
@@ -199,14 +199,14 @@ class FSDPActor(FSDPWorker):
                     total_sequences
                 )
 
-                self.scale_loss(loss).backward()
+                self._scale_loss(loss).backward()
 
                 tbar.update()
                 metric["actor/entropy"].append(entropy.item())
                 metric["actor/loss"].append(loss.item())
                 metric["actor/clip_ratio"].append(clip_ratio.item())
 
-            grad_norm = self.optimizer_step()
+            grad_norm = self._optimizer_step()
 
             for k, v in metric.items():
                 metrics[k].append(
@@ -216,12 +216,12 @@ class FSDPActor(FSDPWorker):
 
         rank0_log(metrics, step)
         if self.config.adv_estimator == "gae":
-            self.load_model_to_device("cpu")
+            self._load_model_to_device("cpu")
 
     @time_logger("update_rollout")
     def update_rollout(self, rollout, step):
 
-        state_dict = self.get_model_state_dict()
+        state_dict = self._get_model_state_dict()
         rollout.update(
             progress_bar(
                 state_dict.items(),

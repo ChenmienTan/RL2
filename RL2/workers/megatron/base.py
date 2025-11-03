@@ -58,7 +58,7 @@ class MegatronWorker(Worker):
             use_distributed_optimizer=True
         )
 
-    def prepare_model_optimizer(self):
+    def _prepare_model_optimizer(self):
 
         if dist.get_rank() == 0:
             print(self.model[0].config)
@@ -76,7 +76,7 @@ class MegatronWorker(Worker):
                 optimizer_config, self.model
             )
 
-        self.offload_model_to_cpu()
+        self._offload_model_to_cpu()
 
     def prepare_scheduler(self, total_steps: int):
 
@@ -98,7 +98,7 @@ class MegatronWorker(Worker):
             **scheduler_config
         )
 
-    def scatter_data(
+    def _scatter_data(
         self,
         tensor_dict: Dict[str, torch.Tensor],
         pack_minibatches: bool = False,
@@ -121,12 +121,12 @@ class MegatronWorker(Worker):
             pair
         )
 
-    def gather_data(
+    def _gather_data(
         self, minibatches: List[Dict[str, torch.Tensor]]
     ) -> Optional[Dict[str, torch.Tensor]]:
         return gather_data(minibatches, mpu.get_data_parallel_group())
 
-    def offload_model_to_cpu(self):
+    def _offload_model_to_cpu(self):
 
         if not getattr(self.config, "offload_model", False):
             return
@@ -145,7 +145,7 @@ class MegatronWorker(Worker):
                     param.data = param.data.to("cpu", non_blocking=True)
         torch.cuda.empty_cache()
 
-    def load_model_to_gpu(self):
+    def _load_model_to_gpu(self):
 
         if not getattr(self.config, "offload_model", False):
             return
@@ -169,7 +169,7 @@ class MegatronWorker(Worker):
                     )
         gc.collect()
 
-    def load_optimizer_to_device(self, device: Union[torch.device, str]):
+    def _load_optimizer_to_device(self, device: Union[torch.device, str]):
 
         if not getattr(self.config, "offload_optimizer", False):
             return
@@ -191,16 +191,16 @@ class MegatronWorker(Worker):
             gc.collect()
             torch.cuda.empty_cache()
 
-    def scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
+    def _scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         return mpu.get_data_parallel_world_size(with_context_parallel=True) * loss
 
-    def forward_backward(
+    def _forward_backward(
         self,
         f: Callable,
         minibatches: List[Dict[str, torch.Tensor]]
     ) -> Union[Tuple[Dict[str, List[float]], torch.Tensor], List[Dict[str, torch.Tensor]]]:
 
-        def forward_step(
+        def _forward_step(
             data_iterator: Iterator, model: List[Union[DDP, nn.Module]]
         ) -> Tuple[torch.Tensor, Callable]:
 
@@ -239,7 +239,7 @@ class MegatronWorker(Worker):
             model=self.model,
             data_iterator=data_iterator,
             num_microbatches=len(minibatches),
-            forward_step_func=forward_step,
+            forward_step_func=_forward_step,
             seq_length=1,
             micro_batch_size=1,
             forward_only=not torch.is_grad_enabled(),
@@ -251,10 +251,10 @@ class MegatronWorker(Worker):
             group_src=mpu.get_pipeline_model_parallel_world_size() - 1
         )
         if torch.is_grad_enabled():
-            self.load_optimizer_to_device(torch.cuda.current_device())
+            self._load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
             self.optimizer.zero_grad()
-            self.load_optimizer_to_device("cpu")
+            self._load_optimizer_to_device("cpu")
             for model in self.model:
                 model.zero_grad_buffer()
             self.scheduler.step(1)
@@ -266,7 +266,7 @@ class MegatronWorker(Worker):
         else:
             return output
 
-    def get_ckpt(self) -> Dict[str, Dict[str, Any]]:
+    def _get_ckpt(self) -> Dict[str, Dict[str, Any]]:
 
         ckpt = {}
         for vpp_rank, model in enumerate(self.model):
@@ -285,7 +285,7 @@ class MegatronWorker(Worker):
 
     def load_ckpt(self, save_dir: str):
         
-        ckpt = self.get_ckpt()
+        ckpt = self._get_ckpt()
         sharded_strategy = get_default_load_sharded_strategy(save_dir)
         sharded_strategy = FullyParallelLoadStrategyWrapper(
             sharded_strategy,
@@ -309,16 +309,16 @@ class MegatronWorker(Worker):
         )
         os.makedirs(f"{save_dir}/optimizer_scheduler", exist_ok=True)
         dist_checkpointing.save(
-            self.get_ckpt(),
+            self._get_ckpt(),
             f"{save_dir}/optimizer_scheduler",
             sharded_strategy=sharded_strategy
         )
 
     def save_model(self, save_dir: str):
 
-        self.load_model_to_gpu()
+        self._load_model_to_gpu()
         self.bridge.save_hf_pretrained(self.model, save_dir)
-        self.offload_model_to_cpu()
+        self._offload_model_to_cpu()
         if dist.get_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         dist.barrier()
