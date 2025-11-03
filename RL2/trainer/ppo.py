@@ -1,6 +1,10 @@
+from typing import Dict
 import hydra
+from omegaconf import DictConfig
 import asyncio
+import torch
 import torch.distributed as dist
+from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import trange
 import wandb
 from RL2.trainer import Trainer
@@ -11,6 +15,7 @@ from RL2.workers import (
     initialize_rollout
 )
 from RL2.utils.communication import initialize_global_process_group
+from RL2.utils.functions import aggregate_values
 from RL2.utils.algorithms import (
     compute_approx_kl, compute_advantages
 )
@@ -19,12 +24,10 @@ from RL2.utils.logging import time_logger
 
 class PPOTrainer(Trainer):
 
-    def __init__(self, config):
+    def __init__(self, config: DictConfig):
         super().__init__(config)
 
         self.actor = initialize_actor(config.actor, True)
-        self.train_dataloader = self.get_dataloader(True)
-        self.test_dataloader = self.get_dataloader(False)
         self.actor.prepare_scheduler(
             self.config.trainer.total_steps
         )
@@ -35,9 +38,11 @@ class PPOTrainer(Trainer):
             self.critic.prepare_scheduler(
                 self.config.trainer.total_steps
             )
-        self.rollout = initialize_rollout(config.rollout)    
+        self.rollout = initialize_rollout(config.rollout)
+        self.train_dataloader = self.get_dataloader(True)
+        self.test_dataloader = self.get_dataloader(False)    
 
-    def get_dataloader(self, train: bool):
+    def get_dataloader(self, train: bool) -> StatefulDataLoader:
 
         dataset = RLDataset(
             self.config.train_data
@@ -48,17 +53,32 @@ class PPOTrainer(Trainer):
         return get_dataloader(dataset)
     
     @time_logger("compute_approx_kl")
-    def compute_approx_kl(self, tensor_dict, step):
+    def compute_approx_kl(
+        self, tensor_dict: Dict[str, torch.Tensor], step: int
+    ):
 
-        approx_kl = compute_approx_kl(
+        old_ref_approx_kl = compute_approx_kl(
             tensor_dict["old_logps"],
             tensor_dict["ref_logps"],
             self.config.actor.kl.reward_estimator
         )
         if self.config.actor.kl.type == "reward":
-            tensor_dict["rewards"] -= self.config.actor.kl.coef * approx_kl
+            tensor_dict["rewards"] -= self.config.actor.kl.coef * old_ref_approx_kl
+        llm_ref_approx_kl = compute_approx_kl(
+            tensor_dict["llm_logps"],
+            tensor_dict["old_logps"],
+            self.config.actor.kl.reward_estimator
+        )
+        old_ref_approx_kl, llm_ref_approx_kl = aggregate_values(
+            (old_ref_approx_kl, llm_ref_approx_kl),
+            tensor_dict["action_mask"],
+            self.config.actor.avg_level,
+            tensor_dict["action_mask"].sum(),
+            tensor_dict["states"].shape[0]
+        )
         wandb.log({
-            "actor/kl": (approx_kl.sum() / tensor_dict["action_mask"].sum()).item()
+            "actor/old_ref_approx_kl": old_ref_approx_kl.item(),
+            "actor/llm_ref_approx_kl": llm_ref_approx_kl.item()
         }, step=step)
             
     async def train(self):
@@ -72,7 +92,7 @@ class PPOTrainer(Trainer):
             1,
             self.config.trainer.total_steps + 1,
             disable=(dist.get_rank() != 0),
-            initial=initial
+            initial=initial + 1
         ):
 
             tensor_dict, cu_seqs = await self.rollout(self.train_dataloader, True, step)
@@ -111,7 +131,7 @@ class PPOTrainer(Trainer):
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
-def main(config):
+def main(config: DictConfig):
 
     initialize_global_process_group()
     

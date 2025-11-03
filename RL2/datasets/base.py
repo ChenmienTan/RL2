@@ -154,7 +154,9 @@ class StatefulCycleDataLoader(StatefulDataLoader):
         return data_list
 
 
-def get_dataloader(dataset, batch_size=None):
+def get_dataloader(
+    dataset: BaseDataset, batch_size: Optional[int]=None
+) -> StatefulDataLoader:
 
     kwargs = {
         "dataset": dataset,

@@ -1,4 +1,5 @@
 import hydra
+from omegaconf import DictConfig
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
@@ -9,7 +10,7 @@ from RL2.utils.communication import initialize_global_process_group
 
 class RMTrainer(Trainer):
 
-    def __init__(self, config):
+    def __init__(self, config: DictConfig):
         super().__init__(config)
 
         self.critic = initialize_critic(config.critic)
@@ -43,7 +44,7 @@ class RMTrainer(Trainer):
 
 
 @hydra.main(config_path="config", config_name="rm", version_base=None)
-def main(config):
+def main(config: DictConfig):
 
     initialize_global_process_group()
 
