@@ -76,7 +76,7 @@ class FSDPActor(FSDPWorker):
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_device(torch.cuda.current_device())
 
-        prefix = "old" if self.train else "ref"
+        prefix = "old_" if self.train else "ref_"
         self.model.eval()
         processed_minibatches = []
         for minibatch in progress_bar(

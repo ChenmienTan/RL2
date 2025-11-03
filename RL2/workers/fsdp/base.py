@@ -59,7 +59,10 @@ class FSDPWorker(Worker):
             prepare_tp_model(self.model, self.model_device_mesh["tp"])
 
         self.model = prepare_dp_model(
-            self.model, self.config.dtype, self.model_device_mesh
+            self.model,
+            self.config.dtype,
+            self.config.tp_size == 1,
+            self.model_device_mesh["ddp", "fsdp"]
         )
 
         if self.train:

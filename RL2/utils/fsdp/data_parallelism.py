@@ -1,5 +1,8 @@
+from typing import Type
 import functools
 import torch
+import torch.nn as nn
+import torch.distributed as dist
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as FSDP,
     MixedPrecision,
@@ -7,12 +10,17 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-def param_init_fn(module):
+def param_init_fn(module: nn.Module):
     module.to_empty(device=torch.cuda.current_device(), recurse=False)
 
-def prepare_dp_model(model, dtype, device_mesh):
+def prepare_dp_model(
+    model: nn.Module,
+    dtype: str,
+    sync_module_states: bool,
+    device_mesh: dist.DeviceMesh
+) -> FSDP:
 
-    def get_module_cls_from_name(name):
+    def get_module_cls_from_name(name: str) -> Type[nn.Module]:
         for module in model.modules():
             if module.__class__.__name__ == name:
                 return module.__class__
@@ -26,7 +34,7 @@ def prepare_dp_model(model, dtype, device_mesh):
         transformer_layer_cls=transformer_layer_cls
     )
 
-    dtype = getattr(torch, dtype)
+    dtype: torch.dtype = getattr(torch, dtype)
     mixed_precision = MixedPrecision(
         param_dtype=dtype,
         reduce_dtype=dtype,
@@ -39,7 +47,7 @@ def prepare_dp_model(model, dtype, device_mesh):
         sharding_strategy=ShardingStrategy.HYBRID_SHARD,
         mixed_precision=mixed_precision,
         param_init_fn=param_init_fn,
-        sync_module_states=device_mesh["tp"].size() == 1,
-        device_mesh=device_mesh["ddp", "fsdp"],
+        sync_module_states=sync_module_states,
+        device_mesh=device_mesh,
         device_id=torch.cuda.current_device()
     )

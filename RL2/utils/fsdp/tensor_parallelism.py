@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 from torch.distributed.tensor.parallel import (
@@ -16,10 +17,12 @@ from transformers import (
     Qwen3ForTokenClassification
 )
 
-def to_empty(module):
+def to_empty(module: nn.Module):
     module.to_empty(device=torch.cuda.current_device())
 
-def sync_module_states(module, attr, device_mesh):
+def sync_module_states(
+    module: nn.Module, attr: str, device_mesh: dist.DeviceMesh
+):
 
     module.to(torch.cuda.current_device())
     dist.broadcast(
@@ -28,7 +31,7 @@ def sync_module_states(module, attr, device_mesh):
         group_src=0
     )
 
-def prepare_llama_tp_layer(layer, device_mesh):
+def prepare_llama_tp_layer(layer: nn.Module, device_mesh: dist.DeviceMesh):
 
     parallelize_plan = {
         "input_layernorm": SequenceParallel(),
@@ -57,7 +60,7 @@ def prepare_llama_tp_layer(layer, device_mesh):
         parallelize_plan=parallelize_plan
     )
 
-def prepare_llama_tp_actor(model, device_mesh):
+def prepare_llama_tp_actor(model: nn.Module, device_mesh: dist.DeviceMesh):
 
     for layer in model.model.layers:
         prepare_llama_tp_layer(layer, device_mesh)
@@ -84,7 +87,7 @@ def prepare_llama_tp_actor(model, device_mesh):
         parallelize_plan=parallelize_plan
     )
 
-def prepare_llama_tp_critic(model, device_mesh):
+def prepare_llama_tp_critic(model: nn.Module, device_mesh: dist.DeviceMesh):
 
     for layer in model.model.layers:
         prepare_llama_tp_layer(layer, device_mesh)
@@ -115,7 +118,7 @@ def prepare_llama_tp_critic(model, device_mesh):
         parallelize_plan=parallelize_plan
     )
 
-def prepare_tp_model(model, device_mesh):
+def prepare_tp_model(model: nn.Module, device_mesh: dist.DeviceMesh):
 
     assert model.config.num_key_value_heads % device_mesh.size() == 0, \
         f"Key and value heads {model.config.num_key_value_heads} must be divisible by tensor parallelism size {device_mesh.size()}."

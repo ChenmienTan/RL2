@@ -1,7 +1,21 @@
+from typing import Any, Optional, List
 import os
+import socket
 from datetime import timedelta
 import torch
 import torch.distributed as dist
+
+def get_host() -> str:
+
+    hostname = socket.gethostname()
+    return socket.gethostbyname(hostname)
+
+def get_available_port() -> int:
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        return s.getsockname()[1]
 
 def initialize_global_process_group(timeout_second=36000):
     
@@ -9,26 +23,25 @@ def initialize_global_process_group(timeout_second=36000):
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
 
-def _unwrap_process_group(process_group):
-    if hasattr(process_group, '_wrapped'):
-        process_group = process_group._wrapped
-    elif hasattr(process_group, 'group'):
-        process_group = process_group.group
-    return process_group
-
-def broadcast_object(obj, src=None, group=None, group_src=None):
+def broadcast_object(
+    obj: Optional[Any],
+    src: Optional[int] = None,
+    group: Optional[dist.ProcessGroup] = None,
+    group_src: Optional[int] = None
+) -> Any:
     object_list = [obj]
     dist.broadcast_object_list(
         object_list,
         src=src,
-        group=_unwrap_process_group(group),
+        group=group,
         group_src=group_src
     )
     return object_list[0]
 
-def gather_and_concat_list(lst, process_group):
+def gather_and_concat_list(
+    lst: List[Any], process_group: dist.ProcessGroup
+) -> Optional[List[Any]]:
 
-    process_group = _unwrap_process_group(process_group)
     lists = (
         dist.get_world_size(process_group) * [None]
         if dist.get_rank(process_group) == 0

@@ -1,7 +1,10 @@
+from typing import Dict, Union, Tuple
 import torch
 import torch.distributed as dist
 
-def differentiable_all_reduce(tensor, process_group):
+def _differentiable_all_reduce(
+    tensor: torch.Tensor, process_group: dist.ProcessGroup
+) -> torch.Tensor:
 
     detached_tensor = tensor.detach()
     dist.all_reduce(
@@ -11,13 +14,17 @@ def differentiable_all_reduce(tensor, process_group):
     )
     return tensor + detached_tensor - tensor.detach()
 
-def compute_logsumexp(logits, process_group, chunk_size=1024):
-
-    # When using tensor parallelism, each device only has a shard of logits.
-    # We firstly compute logsumexp of the sharded logits on each device,
-    # and then perform logsumexp across devices, which is equivalent to 
-    # performing logsumexp over the entire vocabulary.
-
+def _compute_logsumexp(
+    logits: torch.Tensor,
+    process_group: dist.ProcessGroup,
+    chunk_size: int = 1024
+) -> torch.Tensor:
+    """
+    When using tensor parallelism, each process only has a shard of logits.
+    We firstly compute logsumexp of the sharded logits on each process,
+    and then perform logsumexp across processes, which is equivalent to 
+    performing logsumexp over the entire vocabulary.
+    """
     # Direct logsumexp over the entire sequence suffers high memory peak.
     # See https://github.com/OpenRLHF/OpenRLHF/pull/718#issuecomment-2641081881.
     logsumexps = []
@@ -43,11 +50,16 @@ def compute_logsumexp(logits, process_group, chunk_size=1024):
     ], -1)
     return torch.logsumexp(logsumexps, -1)
 
-def gather_action_logits(logits, actions, process_group):
-
-    # When using tensor parallelism, each device only has a shard of logits.
-    # On each device, we gather logits for actions on the device, and then 
-    # perform AllReduce to collect the complete logits.
+def _gather_action_logits(
+    logits: torch.Tensor,
+    actions: torch.Tensor,
+    process_group: dist.ProcessGroup
+) -> torch.Tensor:
+    """
+    When using tensor parallelism, each process only has a shard of logits.
+    On each process, we gather logits for actions on the process, and then 
+    perform AllReduce to collect the complete logits.
+    """
     rank = dist.get_rank(process_group)
     start = rank * logits.shape[-1]
     end = (rank + 1) * logits.shape[-1]
@@ -67,44 +79,48 @@ def gather_action_logits(logits, actions, process_group):
         0.0
     )
 
-    return differentiable_all_reduce(action_logits, process_group)
+    return _differentiable_all_reduce(action_logits, process_group)
 
-def compute_entropy(logits, logsumexp, process_group):
+def _compute_entropy(
+    logits: torch.Tensor,
+    logsumexp: torch.Tensor,
+    process_group: dist.ProcessGroup
+) -> torch.Tensor:
 
     probs = torch.exp(logits - logsumexp.unsqueeze(-1))
-    return logsumexp - differentiable_all_reduce(
+    return logsumexp - _differentiable_all_reduce(
         (probs * logits).sum(-1), process_group
     )
 
 def compute_logps_and_entropy(
-    logits,
-    minibatch,
-    process_group,
-    prefix=None,
-    return_entropy=False
-):
-            
-    logsumexp = compute_logsumexp(logits, process_group)
-    action_logits = gather_action_logits(
+    logits: torch.Tensor,
+    minibatch: Dict[str, torch.Tensor],
+    process_group: dist.ProcessGroup,
+    prefix: str = "",
+    return_entropy: bool = False
+):  
+    logsumexp = _compute_logsumexp(logits, process_group)
+    action_logits = _gather_action_logits(
         logits,
         minibatch["actions"],
         process_group
     )
-    key = f"{prefix}_logps" if prefix else "logps"
-    minibatch[key] = (action_logits - logsumexp) * minibatch["action_mask"]
+    minibatch[f"{prefix}logps"] = (
+        action_logits - logsumexp
+    ) * minibatch["action_mask"]
 
     if return_entropy:
-        minibatch["entropy"] = compute_entropy(
+        minibatch["entropy"] = _compute_entropy(
             logits, logsumexp, process_group
         ) * minibatch["action_mask"]
 
 def aggregate_values(
-    tensor,
-    action_mask,
-    avg_level,
-    total_actions,
-    total_sequences
-):
+    tensor: Union[torch.Tensor, Tuple[torch.Tensor]],
+    action_mask: torch.Tensor,
+    avg_level: str,
+    total_actions: int,
+    total_sequences: int
+) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
     
     if isinstance(tensor, tuple):
         return tuple(

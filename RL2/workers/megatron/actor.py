@@ -32,7 +32,7 @@ class MegatronActor(MegatronWorker):
         minibatches = self.scatter_data(tensor_dict)
         self.load_model_to_gpu()
 
-        prefix = "old" if self.train else "ref"
+        prefix = "old_" if self.train else "ref_"
         for model in self.model:
             model.eval()
         def f(minibatch, cu_seqlens, logits, non_loss_data=True):

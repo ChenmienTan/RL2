@@ -1,6 +1,7 @@
 from typing import Optional, Dict, Any
 import os
 import torch
+import torch.distributed as dist
 import transformers
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.modeling_flash_attention_utils import (
@@ -34,7 +35,7 @@ def _flash_attention_forward(
     target_dtype: Optional[torch.dtype] = None,
     attn_implementation: Optional[str] = None,
     **kwargs
-):
+) -> torch.Tensor:
     use_sliding_windows = (
         sliding_window is not None
         and key_states.shape[1] > sliding_window
@@ -69,7 +70,7 @@ def _flash_attention_forward(
 transformers.modeling_flash_attention_utils._flash_attention_forward = _flash_attention_forward
 ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
 
-def update_ring_attn_params(process_group, cu_seqlens):
+def update_ring_attn_params(process_group: dist.ProcessGroup, cu_seqlens: torch.Tensor):
 
     max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
     DATA_PARAMS["group"] = process_group
