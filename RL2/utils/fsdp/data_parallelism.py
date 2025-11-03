@@ -10,7 +10,7 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 def param_init_fn(module):
     module.to_empty(device=torch.cuda.current_device(), recurse=False)
 
-def prepare_dp_model(model, device_mesh):
+def prepare_dp_model(model, dtype, device_mesh):
 
     def get_module_cls_from_name(name):
         for module in model.modules():
@@ -26,10 +26,11 @@ def prepare_dp_model(model, device_mesh):
         transformer_layer_cls=transformer_layer_cls
     )
 
+    dtype = getattr(torch, dtype)
     mixed_precision = MixedPrecision(
-        param_dtype=torch.bfloat16,
-        reduce_dtype=torch.bfloat16,
-        buffer_dtype=torch.bfloat16
+        param_dtype=dtype,
+        reduce_dtype=dtype,
+        buffer_dtype=dtype
     )
 
     return FSDP(

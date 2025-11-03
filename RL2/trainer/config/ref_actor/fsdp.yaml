@@ -1,5 +1,6 @@
 model_name: ${actor.model_name}
 use_liger_kernel: ${actor.use_liger_kernel}
+dtype: ${actor.dtype}
 ddp_size: ${actor.ddp_size}
 tp_size: ${actor.tp_size}
 cp_size: ${actor.cp_size}

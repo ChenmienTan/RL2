@@ -39,7 +39,11 @@ class MegatronWorker(Worker):
         self.bridge = AutoBridge.from_hf_pretrained(config.model_name)
 
         self.provider = self.bridge.to_megatron_provider()
-        self.provider.bf16 = True
+        setattr(
+            self.provider,
+            {"float16": "fp16", "bfloat16": "bf16"}[config.dtype],
+            True
+        )
         self.provider.attention_backend = "flash"
         tf_config = OmegaConf.to_container(config.tf_config)
         for k, v in tf_config.items():

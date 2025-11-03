@@ -34,7 +34,7 @@ actor:
 rollout:
   server_args:
     model_path: ${actor.model_name}
-    dtype: bfloat16
+    dtype: ${actor.dtype}
     tp_size: 1
     mem_fraction_static: 0.6
   train_prompts_per_rollout: null

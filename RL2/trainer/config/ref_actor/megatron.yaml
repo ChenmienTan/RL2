@@ -1,4 +1,5 @@
 model_name: ${actor.model_name}
+dtype: ${actor.dtype}
 tf_config:
   pipeline_model_parallel_size: ${actor.tf_config.pipeline_model_parallel_size}
   virtual_pipeline_model_parallel_size: ${actor.tf_config.virtual_pipeline_model_parallel_size}

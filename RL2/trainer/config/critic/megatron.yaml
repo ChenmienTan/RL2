@@ -1,4 +1,5 @@
 model_name: null
+dtype: bfloat16
 tf_config:
   pipeline_model_parallel_size: 1
   virtual_pipeline_model_parallel_size: null

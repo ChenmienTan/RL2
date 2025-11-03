@@ -1,4 +1,5 @@
 model_name: null
+dtype: bfloat16
 enable_gradient_checkpointing: true
 ddp_size: 1
 tp_size: 1
