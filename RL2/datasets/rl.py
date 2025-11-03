@@ -1,9 +1,10 @@
+from typing import Dict, Union, Any
 from RL2.datasets.base import BaseDataset
 
 
 class RLDataset(BaseDataset):
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, Union[str, Dict[str, Any]]]:
 
         ex = self.dataset[idx]
         data = {}
@@ -19,6 +20,3 @@ class RLDataset(BaseDataset):
 
         data["extra_info"] = ex.get("extra_info", {})
         return data
-    
-    def collate_fn(self, batch):
-        return batch[0]

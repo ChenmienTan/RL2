@@ -1,9 +1,11 @@
+from typing import Tuple, Dict
+import torch
 from RL2.datasets import RMDataset
 
 
 class DPODataset(RMDataset):
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor]]:
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
