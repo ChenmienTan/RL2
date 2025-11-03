@@ -240,9 +240,10 @@ class Rollout:
             tbar = progress_bar(
                 total=prompts_per_rollout, desc="Rollout"
             )
-            all_tensor_dicts, metrics, pendings = [], [], set()
-            while len(all_tensor_dicts) < prompts_per_rollout:
-                if train or len(all_tensor_dicts) == 0:
+            num_tasks_to_finish, first_iter, pendings = prompts_per_rollout, True, set()
+            all_tensor_dicts, metrics = [], []
+            while num_tasks_to_finish > 0:
+                if train or first_iter:
                     for data in dataloader(
                         prompts_per_rollout - len(pendings)
                     ):
@@ -255,10 +256,17 @@ class Rollout:
                     pendings, return_when=asyncio.FIRST_COMPLETED
                 )
                 for task in done:
-                    all_tensor_dicts_delta, metrics_delta = task.result()
-                    all_tensor_dicts.extend(all_tensor_dicts_delta)
-                    metrics.extend(metrics_delta)
-                tbar.update(len(done))
+                    if num_tasks_to_finish > 0:
+                        tbar.update()
+                        num_tasks_to_finish -= 1
+                        first_iter = False
+                        all_tensor_dicts_delta, metrics_delta = task.result()
+                        all_tensor_dicts.extend(all_tensor_dicts_delta)
+                        metrics.extend(metrics_delta)
+
+            for task in pendings:
+                task.cancel()
+            await asyncio.gather(*pendings, return_exceptions=True)
 
             suffix = "train" if train else "test"
             metrics = {
@@ -269,7 +277,9 @@ class Rollout:
 
         dist.barrier()
 
-        self.make_request("abort_request", payload={"abort_all": True})
+        for _ in range(10):
+            self.make_request("abort_request", payload={"abort_all": True})
+            time.sleep(0.1)
 
         if not train:
             return
