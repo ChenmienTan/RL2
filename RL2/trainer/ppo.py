@@ -26,14 +26,14 @@ class PPOTrainer(Trainer):
         self.train_dataloader = self.get_dataloader(True)
         self.test_dataloader = self.get_dataloader(False)
         self.actor.prepare_scheduler(
-            self.config.trainer.n_epochs * len(self.train_dataloader)
+            self.config.trainer.total_steps
         )
         if config.actor.kl.coef > 0:
             self.ref_actor = initialize_actor(config.ref_actor, False)
         if config.adv.estimator == "gae":
             self.critic = initialize_critic(config.critic)
             self.critic.prepare_scheduler(
-                self.config.trainer.n_epochs * len(self.train_dataloader)
+                self.config.trainer.total_steps
             )
         self.rollout = initialize_rollout(config.rollout)    
 
@@ -70,7 +70,7 @@ class PPOTrainer(Trainer):
         )
         for step in trange(
             1,
-            self.config.trainer.total_steps,
+            self.config.trainer.total_steps + 1,
             disable=(dist.get_rank() != 0),
             initial=initial
         ):
@@ -111,14 +111,14 @@ class PPOTrainer(Trainer):
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
-async def main(config):
+def main(config):
 
     initialize_global_process_group()
     
     trainer = PPOTrainer(config)
-    trainer.train()
+    asyncio.run(trainer.train())
 
     dist.destroy_process_group()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
