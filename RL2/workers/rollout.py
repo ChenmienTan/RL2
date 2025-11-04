@@ -354,7 +354,8 @@ class Rollout:
             self._make_request(
                 "pause_generation", self.worker_urls
             )
-            done, _ = await asyncio.wait(pendings) # TODO: save done for next call
+            if pendings:
+                done, _ = await asyncio.wait(pendings) # TODO: save done for next call
 
             suffix = "train" if train else "test"
             metrics = {
