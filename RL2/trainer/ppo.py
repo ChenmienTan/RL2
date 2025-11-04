@@ -92,7 +92,7 @@ class PPOTrainer(Trainer):
             1,
             self.config.trainer.total_steps + 1,
             disable=(dist.get_rank() != 0),
-            initial=initial + 1
+            initial=initial
         ):
 
             tensor_dict, cu_seqs = await self.rollout(self.train_dataloader, True, step)
