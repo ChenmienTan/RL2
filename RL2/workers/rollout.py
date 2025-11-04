@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any, List, Tuple, Generator
+from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Callable
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -37,6 +37,165 @@ try:
 except ImportError: # older version of SGLang
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
+
+class Experience:
+
+    def __init__(
+        self,
+        tokenizer: AutoTokenizer,
+        state_text: Optional[str],
+        extra_info: Dict[str, Any]
+    ):
+
+        self.tokenizer = tokenizer
+        self.state_text = state_text
+        self.extra_info = extra_info
+
+        self.turn = 0
+        if state_text is not None:
+            self.state_dict = self._initialize_state_dict(state_text)
+        self.state_dicts: List[Dict[str, List[int]]] = []
+        self.rewards, self.scores = [], []
+        self.metric = defaultdict(list)
+    
+    def _initialize_state_dict(
+        self, state_text: str
+    ) -> Dict[str, Union[List[int], List[float]]]:
+        
+        state = self.tokenizer.encode(state_text, add_special_tokens=False)
+        return {
+            "states": state,
+            "actions": len(state) * [0],
+            "action_mask": len(state) * [0],
+            "logps": len(state) * [0.0],
+            "rewards": len(state) * [0.0]
+        }
+
+    def _add_llm_response(self, payload: Dict[str, Any]):
+        # TODO: consider abort
+        self.action_text = payload["text"]
+        self.turn += 1 
+        meta_info = payload["meta_info"]
+        # COMMENT: token-in-token-out
+        logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+        self.state_dict["states"].extend(action)
+        self.state_dict["actions"].extend(action)
+        self.state_dict["action_mask"].extend(len(action) * [1])
+        self.state_dict["logps"].extend(logp)
+        self.metric["response_length"].append(meta_info["completion_tokens"])
+        self.metric["length_clip_ratio"].append(
+            meta_info["finish_reason"]["type"] == "length"
+        )
+
+    def _add_env_response(self, payload: Dict[str, Any]) -> bool:
+        
+        self.extra_info = payload["extra_info"]
+        self.state_dict["rewards"].extend(
+            (self.metric["response_length"][-1] - 1) * [0] + [payload["reward"]]
+        )
+        self.rewards.append(payload["reward"])
+        self.scores.append(payload["score"])
+
+        if payload["done"]:
+            self.state_dicts.append(self.state_dict)
+            self.metric["n_turns"].append(self.turn)
+            self.metric["reward"].append(sum(self.rewards))
+            self.metric["scores"].append(sum(self.scores))
+            return True
+        if payload["next_state"].startswith(self.state_text + self.action_text):
+            state_dict_delta = self._initialize_state_dict(
+                payload["next_state"][len(self.state_text + self.action_text):]
+            )
+            for k, v in state_dict_delta.items():
+                self.state_dict[k].extend(v)
+        else:
+            self.state_dicts.append(self.state_dict)
+            self.state_dict = self._initialize_state_dict(payload["next_state"])
+        self.state_text = payload["next_state"]
+        return False
+
+    async def make(
+        self,
+        async_generate_func: Callable,
+        env_step_func: Callable,
+        train: bool,
+        env_reset_func: Optional[Callable]
+    ) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, Union[List[float], List[int], List[bool]]]]:
+
+        if self.state_text is None:
+            self.state_text, self.extra_info = await env_reset_func(
+                self.extra_info
+            )
+            self.state_dict = self._initialize_state_dict(self.state_text)
+
+        while True:
+
+            self._add_llm_response(
+                await async_generate_func(
+                    self.state_dict["states"], train
+                )
+            )
+            done = self._add_env_response(
+                await env_step_func(
+                    self.state_text,
+                    self.action_text,
+                    self.extra_info
+                )
+            )
+            if done:
+                tensor_dicts = []
+                for state_dict in self.state_dicts:
+                    tensor_dict = get_tensor_dict(
+                        state_dict["states"],
+                        state_dict["actions"],
+                        state_dict["action_mask"]
+                    )
+                    tensor_dict["llm_logps"] = torch.FloatTensor(
+                        state_dict["logps"][1:]
+                    )
+                    tensor_dict["rewards"] = torch.FloatTensor(
+                        state_dict["rewards"][1:]
+                    )
+                    tensor_dicts.append(tensor_dict)
+                return tensor_dicts, self.metric       
+
+
+class ExperienceGroup:
+
+    def __init__(
+        self,
+        group_size: int,
+        tokenizer: AutoTokenizer,
+        state_text: Optional[str],
+        extra_info: Dict[str, Any]
+    ):
+
+        self.experiences = [
+            Experience(tokenizer, state_text, deepcopy(extra_info))
+            for _ in range(group_size)
+        ]
+
+    async def make(
+        self,
+        async_generate_func: Callable,
+        env_step_func: Callable,
+        train: bool,
+        env_reset_func: Optional[Callable]
+    ) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, Union[List[float], List[int], List[bool]]]]]:
+        output = await asyncio.gather(*(
+            experience.make(
+                async_generate_func,
+                env_step_func,
+                train,
+                env_reset_func
+            )
+            for experience in self.experiences
+        ))
+        return map(
+            list,
+            zip(*output)
+        )
+        
 
 class Rollout:
 
@@ -205,107 +364,6 @@ class Rollout:
                         return await response.json(content_type=None)
                 except:
                     await asyncio.sleep(retry_delay)
-        
-    async def _rollout(
-        self,
-        data: Dict[str, Any],
-        train: bool
-    ) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[float]]]:
-
-        def _initialize_state_dict(state_text: str) -> Dict[str, List[int]]:
-            states = self.tokenizer.encode(state_text, add_special_tokens=False)
-            return {
-                "states": states,
-                "actions": len(states) * [0],
-                "action_mask": len(states) * [0],
-                "logps": len(states) * [0],
-                "rewards": len(states) * [0]
-            }
-
-        def _state_dict_to_tensor_dict(
-            state_dict: Dict[str, List[int]]
-        ) -> Dict[str, torch.Tensor]:
-
-            tensor_dict = get_tensor_dict(
-                state_dict["states"],
-                state_dict["actions"],
-                state_dict["action_mask"]
-            )
-            tensor_dict["llm_logps"] = torch.FloatTensor(state_dict["logps"][1:])
-            tensor_dict["rewards"] = torch.FloatTensor(state_dict["rewards"][1:])
-            return tensor_dict
-
-        if "prompt" in data:
-            state_text = data["prompt"]
-        else:
-            state_text, data["extra_info"] = await self.env.reset(
-                data["extra_info"]
-            )
-        state_dict = _initialize_state_dict(state_text)
-        env_response = {"extra_info": data["extra_info"]}
-        tensor_dicts = []
-        metric = defaultdict(list)
-        rewards, scores = [], []
-        for turn in range(1, self.config.max_turns + 1):
-
-            llm_response = await self._async_generate(
-                state_dict["states"], train
-            )
-            meta_info = llm_response["meta_info"]
-            logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
-            state_dict["states"].extend(action)
-            state_dict["actions"].extend(action)
-            state_dict["action_mask"].extend(len(action) * [1])
-            state_dict["logps"].extend(logp)
-            metric["response_length"].append(meta_info["completion_tokens"])
-            metric["length_clip_ratio"].append(
-                meta_info["finish_reason"]["type"] == "length"
-            )
-
-            action_text = llm_response["text"]
-            env_response = await self.env.step(
-                state_text, action_text, env_response["extra_info"]
-            )
-            state_dict["rewards"].extend((len(action) - 1) * [0] + [env_response["reward"]])
-            rewards.append(env_response["reward"])
-            scores.append(env_response["score"])
-            if turn == self.config.max_turns or env_response["done"]:
-                tensor_dicts.append(_state_dict_to_tensor_dict(state_dict))
-                break
-            if env_response["next_state"].startswith(state_text + action_text):
-                state_dict_delta = _initialize_state_dict(
-                    env_response["next_state"][len(state_text + action_text):]
-                )
-                for k, v in state_dict_delta.items():
-                    state_dict[k].extend(v)
-            else:
-                tensor_dicts.append(_state_dict_to_tensor_dict(state_dict))
-                state_dict = _initialize_state_dict(env_response["next_state"])
-            state_text = env_response["next_state"]
-
-        metric["n_turns"].append(turn)
-        metric["reward"].append(sum(rewards))
-        metric["scores"].append(sum(scores))
-
-        return tensor_dicts, metric
-
-    async def _group_rollout(
-        self,
-        data: Dict[str, Any],
-        train: bool
-    ) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, List[float]]]]:
-
-        outputs = await asyncio.gather(
-            *(
-                self._rollout(deepcopy(data), train)
-                for _ in range(
-                    self.config.responses_per_prompt
-                    if train else 1
-                )
-            )
-        )
-        all_tensor_dicts, metrics = map(list, zip(*outputs))
-        return all_tensor_dicts, metrics
 
     @time_logger("rollout")
     async def __call__(
@@ -317,6 +375,9 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
+            self._make_request(
+                "continue_generation", self.worker_urls
+            )
             prompts_per_rollout = (
                 self.config.train_prompts_per_rollout if train else
                 self.config.test_prompts_per_rollout or len(dataloader)
@@ -324,19 +385,30 @@ class Rollout:
             tbar = progress_bar(
                 total=prompts_per_rollout, desc="Rollout"
             )
-            self._make_request(
-                "continue_generation", self.worker_urls
-            )
-            num_tasks_to_finish, first_iter, pendings = prompts_per_rollout, True, set()
-            all_tensor_dicts, metrics = [], []
+            num_tasks_to_finish = prompts_per_rollout
+            first_iter = True
+            pendings = set()
+            all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
+            metrics: List[Dict[str, Union[List[float], List[int], List[bool]]]] = []
             while num_tasks_to_finish > 0:
                 if first_iter or (self.config.partial_rollout and train):
                     for data in dataloader(
                         prompts_per_rollout - len(pendings)
                     ):
+                        experience_group = ExperienceGroup(
+                            self.config.responses_per_prompt if train else 1,
+                            self.tokenizer,
+                            data.get("prompt", None),
+                            data["extra_info"]
+                        )
                         pendings.add(
                             asyncio.create_task(
-                                self._group_rollout(data, train)
+                                experience_group.make(
+                                    self._async_generate,
+                                    self.env.step,
+                                    train,
+                                    getattr(self.env, "reset", None)
+                                )
                             )
                         )
                 done, pendings = await asyncio.wait(
