@@ -6,7 +6,7 @@ defaults:
 
 train_data:
   path: null
-  responses_per_prompt: null
+  responses_per_prompt: ${rollout.responses_per_prompt}
 
 test_data:
   path: null
@@ -41,6 +41,7 @@ rollout:
     mem_fraction_static: 0.6
   train_prompts_per_rollout: null
   test_prompts_per_rollout: null
+  responses_per_prompt: null
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: null
