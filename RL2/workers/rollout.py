@@ -54,13 +54,16 @@ class Experience:
         self.turn = 0
         if state_text is not None:
             self.state_dict = self._initialize_state_dict(state_text)
-        self.state_dicts: List[Dict[str, List[int]]] = []
+        self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
         self.rewards, self.scores = [], []
         self.metric = defaultdict(list)
+
+        self.previous_action_text = ""
+        self.previous_response_length = 0
     
     def _initialize_state_dict(
         self, state_text: str
-    ) -> Dict[str, Union[List[int], List[float]]]:
+    ) -> Dict[str, List[Union[int, float]]]:
         
         state = self.tokenizer.encode(state_text, add_special_tokens=False)
         return {
@@ -71,27 +74,38 @@ class Experience:
             "rewards": len(state) * [0.0]
         }
 
-    def _add_llm_response(self, payload: Dict[str, Any]):
-        # TODO: consider abort
-        self.action_text = payload["text"]
-        self.turn += 1 
-        meta_info = payload["meta_info"]
+    def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
+
+        self.action_text = self.previous_action_text + payload["text"]
+        self.turn += 1
         # COMMENT: token-in-token-out
-        logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
-        self.state_dict["states"].extend(action)
-        self.state_dict["actions"].extend(action)
-        self.state_dict["action_mask"].extend(len(action) * [1])
-        self.state_dict["logps"].extend(logp)
-        self.metric["response_length"].append(meta_info["completion_tokens"])
-        self.metric["length_clip_ratio"].append(
-            meta_info["finish_reason"]["type"] == "length"
+        meta_info = payload["meta_info"]
+        if len(meta_info["output_token_logprobs"]) > 0:
+            logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+            self.state_dict["states"].extend(action)
+            self.state_dict["actions"].extend(action)
+            self.state_dict["action_mask"].extend(len(action) * [1])
+            self.state_dict["logps"].extend(logp)
+
+        finish_reason = meta_info["finish_reason"]["type"]
+        if finish_reason == "abort":
+            self.previous_action_text = self.action_text
+            self.previous_response_length = meta_info["completion_tokens"]
+            return True
+        
+        self.metric["response_length"].append(
+            self.previous_response_length + meta_info["completion_tokens"]
         )
+        self.metric["length_clip_ratio"].append(finish_reason == "length")
+        return False
 
     def _add_env_response(self, payload: Dict[str, Any]) -> bool:
         
         self.extra_info = payload["extra_info"]
         self.state_dict["rewards"].extend(
-            (self.metric["response_length"][-1] - 1) * [0] + [payload["reward"]]
+            (
+                len(self.state_dict["states"]) - len(self.state_dict["rewards"]) - 1
+            ) * [0] + [payload["reward"]]
         )
         self.rewards.append(payload["reward"])
         self.scores.append(payload["score"])
@@ -120,7 +134,7 @@ class Experience:
         env_step_func: Callable,
         train: bool,
         env_reset_func: Optional[Callable]
-    ) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, Union[List[float], List[int], List[bool]]]]:
+    ):
 
         if self.state_text is None:
             self.state_text, self.extra_info = await env_reset_func(
@@ -130,11 +144,13 @@ class Experience:
 
         while True:
 
-            self._add_llm_response(
+            abort = self._add_llm_response(
                 await async_generate_func(
                     self.state_dict["states"], train
-                )
+                ) # TODO: perhaps less tokens
             )
+            if abort:
+                return
             done = self._add_env_response(
                 await env_step_func(
                     self.state_text,
@@ -143,21 +159,25 @@ class Experience:
                 )
             )
             if done:
-                tensor_dicts = []
-                for state_dict in self.state_dicts:
-                    tensor_dict = get_tensor_dict(
-                        state_dict["states"],
-                        state_dict["actions"],
-                        state_dict["action_mask"]
-                    )
-                    tensor_dict["llm_logps"] = torch.FloatTensor(
-                        state_dict["logps"][1:]
-                    )
-                    tensor_dict["rewards"] = torch.FloatTensor(
-                        state_dict["rewards"][1:]
-                    )
-                    tensor_dicts.append(tensor_dict)
-                return tensor_dicts, self.metric       
+                return
+
+    def to_tensor_dicts_and_metric(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
+
+        tensor_dicts = []
+        for state_dict in self.state_dicts:
+            tensor_dict = get_tensor_dict(
+                state_dict["states"],
+                state_dict["actions"],
+                state_dict["action_mask"]
+            )
+            tensor_dict["llm_logps"] = torch.FloatTensor(
+                state_dict["logps"][1:]
+            )
+            tensor_dict["rewards"] = torch.FloatTensor(
+                state_dict["rewards"][1:]
+            )
+            tensor_dicts.append(tensor_dict)
+        return tensor_dicts, self.metric 
 
 
 class ExperienceGroup:
@@ -181,8 +201,8 @@ class ExperienceGroup:
         env_step_func: Callable,
         train: bool,
         env_reset_func: Optional[Callable]
-    ) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, Union[List[float], List[int], List[bool]]]]]:
-        output = await asyncio.gather(*(
+    ) -> "ExperienceGroup":
+        await asyncio.gather(*(
             experience.make(
                 async_generate_func,
                 env_step_func,
@@ -191,11 +211,17 @@ class ExperienceGroup:
             )
             for experience in self.experiences
         ))
-        return map(
-            list,
-            zip(*output)
-        )
+        return self
+    
+    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, List[Union[float, int, bool]]]]]:
         
+        all_tensor_dicts, metrics = [], []
+        for experience in self.experiences:
+            tensor_dicts, metric = experience.to_tensor_dicts_and_metric()
+            all_tensor_dicts.append(tensor_dicts)
+            metrics.append(metric)
+        return all_tensor_dicts, metrics
+
 
 class Rollout:
 
@@ -419,7 +445,8 @@ class Rollout:
                         tbar.update()
                         num_tasks_to_finish -= 1
                         first_iter = False # TODO: print when first_iter is True
-                        all_tensor_dicts_delta, metrics_delta = task.result()
+                        experience_group = task.result()
+                        all_tensor_dicts_delta, metrics_delta = experience_group.to_all_tensor_dicts_and_metrics()
                         all_tensor_dicts.extend(all_tensor_dicts_delta)
                         metrics.extend(metrics_delta)
 
