@@ -6,9 +6,11 @@ defaults:
 
 train_data:
   path: null
+  responses_per_prompt: null
 
 test_data:
   path: null
+  responses_per_prompt: 1
 
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}
@@ -39,7 +41,6 @@ rollout:
     mem_fraction_static: 0.6
   train_prompts_per_rollout: null
   test_prompts_per_rollout: null
-  responses_per_prompt: 1
   train_sampling_params:
     temperature: 1.0
     max_new_tokens: null

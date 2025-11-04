@@ -215,7 +215,7 @@ class RLDataset(BaseDataset):
 
         extra_info = ex.get("extra_info", {})
         return ExperienceGroup(
-            1, # TODO: set correct group size
+            self.config.responses_per_prompt,
             self.tokenizer,
             state_text,
             extra_info
