@@ -52,6 +52,7 @@ rollout:
     no_stop_trim: ${rollout.train_sampling_params.no_stop_trim}
   max_turns: 1
   env_path: null
+  partial_rollout: false
   dynamic_filtering: true
 
 ref_actor:

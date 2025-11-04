@@ -123,7 +123,7 @@ class Rollout:
             port=get_available_port(),
             log_level="error",
             **server_args
-        ) # TODO: how to disable abort messages?
+        )
         self.worker_url = server_args.url()
         launch_server_process(server_args)
 
@@ -330,7 +330,7 @@ class Rollout:
             num_tasks_to_finish, first_iter, pendings = prompts_per_rollout, True, set()
             all_tensor_dicts, metrics = [], []
             while num_tasks_to_finish > 0:
-                if train or first_iter:
+                if first_iter or (self.config.partial_rollout and train):
                     for data in dataloader(
                         prompts_per_rollout - len(pendings)
                     ):
