@@ -12,16 +12,20 @@ class Experience:
 
     def __init__(
         self,
+        max_turns: int,
+        max_new_tokens: int,
         tokenizer: AutoTokenizer,
         state_text: Optional[str],
         extra_info: Dict[str, Any]
     ):
 
+        self.max_turns = max_turns
+        self.max_new_tokens = max_new_tokens
         self.tokenizer = tokenizer
         self.state_text = state_text
         self.extra_info = extra_info
 
-        self.turn = 0 # TODO: feed into extra_info
+        self.turn = 0
         if state_text is not None:
             self.state_dict = self._initialize_state_dict(state_text)
         self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
@@ -61,13 +65,16 @@ class Experience:
         finish_reason = meta_info["finish_reason"]["type"]
         if finish_reason == "abort":
             self.previous_action_text = self.action_text
-            self.previous_response_length = meta_info["completion_tokens"]
+            self.previous_response_length += meta_info["completion_tokens"]
             return True
         
         self.metric["response_length"].append(
             self.previous_response_length + meta_info["completion_tokens"]
         )
         self.metric["length_clip_ratio"].append(finish_reason == "length")
+
+        self.previous_action_text = ""
+        self.previous_response_length = 0
         return False
 
     def _add_env_response(self, payload: Dict[str, Any]) -> bool:
@@ -81,7 +88,7 @@ class Experience:
         self.rewards.append(payload["reward"])
         self.scores.append(payload["score"])
 
-        if payload["done"]:
+        if self.turn == self.max_turns or payload["done"]:
             self.state_dicts.append(self.state_dict)
             self.metric["n_turns"].append(self.turn)
             self.metric["reward"].append(sum(self.rewards))
@@ -116,8 +123,9 @@ class Experience:
 
             abort = self._add_llm_response(
                 await async_generate_func(
-                    self.state_dict["states"]
-                ) # TODO: perhaps less tokens
+                    self.state_dict["states"],
+                    self.max_new_tokens - self.previous_response_length
+                )
             )
             if abort:
                 return
@@ -136,6 +144,7 @@ class Experience:
 
         tensor_dicts = []
         for state_dict in self.state_dicts:
+            # TODO: remove sequences without actions
             tensor_dict = get_tensor_dict(
                 state_dict["states"],
                 state_dict["actions"],
@@ -156,13 +165,21 @@ class ExperienceGroup:
     def __init__(
         self,
         group_size: int,
+        max_turns: int,
+        max_new_tokens: int,
         tokenizer: AutoTokenizer,
         state_text: Optional[str],
         extra_info: Dict[str, Any]
     ):
 
         self.experiences = [
-            Experience(tokenizer, state_text, deepcopy(extra_info))
+            Experience(
+                max_turns,
+                max_new_tokens,
+                tokenizer,
+                state_text,
+                deepcopy(extra_info)
+            )
             for _ in range(group_size)
         ]
 
@@ -213,6 +230,8 @@ class RLDataset(BaseDataset):
         extra_info = ex.get("extra_info", {})
         return ExperienceGroup(
             self.config.responses_per_prompt,
+            self.config.max_turns,
+            self.config.max_new_tokens,
             self.tokenizer,
             state_text,
             extra_info

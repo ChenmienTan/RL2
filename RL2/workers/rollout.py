@@ -184,14 +184,20 @@ class Rollout:
     async def _async_generate(
         self,
         states: List[int],
+        max_new_tokens: int,
         train: bool,
         max_trials: int = 3,
         retry_delay: int = 1
     ) -> Optional[Dict[str, Any]]:
         
+        sampling_params = (
+            self.train_sampling_params
+            if train else self.test_sampling_params
+        )
+        sampling_params["max_new_tokens"] = max_new_tokens
         payload = {
             "input_ids": states,
-            "sampling_params": self.train_sampling_params if train else self.test_sampling_params,
+            "sampling_params": sampling_params,
             "return_logprob": True
         }
 

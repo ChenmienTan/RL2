@@ -7,10 +7,14 @@ defaults:
 train_data:
   path: null
   responses_per_prompt: ${rollout.responses_per_prompt}
+  max_turns: 1
+  max_new_tokens: null
 
 test_data:
   path: null
   responses_per_prompt: 1
+  max_turns: ${train_data.max_turns}
+  max_new_tokens: ${train_data.max_new_tokens}
 
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}
@@ -44,15 +48,12 @@ rollout:
   responses_per_prompt: null
   train_sampling_params:
     temperature: 1.0
-    max_new_tokens: null
     stop: null
     no_stop_trim: true
   test_sampling_params:
     temperature: 0.0
-    max_new_tokens: ${rollout.train_sampling_params.max_new_tokens}
     stop: ${rollout.train_sampling_params.stop}
     no_stop_trim: ${rollout.train_sampling_params.no_stop_trim}
-  max_turns: 1
   env_path: null
   partial_rollout: false
   dynamic_filtering: true
