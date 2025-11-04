@@ -32,7 +32,6 @@ from RL2.utils.communication import broadcast_object
 from RL2.utils.sequences import scatter_data, gather_data, slide_along_cp
 
 
-
 class MegatronWorker(Worker):
 
     def __init__(self, config: DictConfig, train: bool):

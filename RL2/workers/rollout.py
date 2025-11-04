@@ -406,6 +406,7 @@ class Rollout:
         )
         
         for name, tensor in named_tensor_generator:
+            # TODO: bucketize parameters to improve efficiency
             tensor = tensor.to(torch.cuda.current_device())
             serialized_tensor = MultiprocessingSerializer.serialize(
                 tensor.full_tensor() if isinstance(tensor, DTensor) else tensor

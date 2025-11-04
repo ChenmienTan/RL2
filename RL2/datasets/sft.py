@@ -2,6 +2,7 @@ from typing import Tuple, Dict
 import torch
 from RL2.datasets import BaseDataset, pack_tensor_dicts
 
+
 class SFTDataset(BaseDataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:

@@ -19,8 +19,6 @@ class Trainer:
                 load_dirs, key=lambda dir: int(dir.split("/step")[-1])
             ) if load_dirs else None
         if self.load_dir is not None:
-            if dist.get_rank() == 0:
-                print(f"Loading checkpoint from {self.load_dir}")
             if hasattr(config, "actor"):
                 config.actor.model_name = f"{self.load_dir}/actor/model"
             if hasattr(config, "critic"):

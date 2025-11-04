@@ -88,7 +88,7 @@ def compute_advantages(
             k: v[indices]
             for k, v in tensor_dict.items()
         }
-    
+    # COMMENT: non-concat state transition
     processed_tensor_dict = pack_tensor_dicts([
         extract_actions(
             {
