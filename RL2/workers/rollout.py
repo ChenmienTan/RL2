@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, List, Tuple, Generator
+from typing import Optional, Union, Dict, Any, List, Tuple, Generator
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -147,16 +147,24 @@ class Rollout:
     def _make_request(
         self,
         endpoint: str,
-        url: Optional[str] = None,
+        url: Optional[Union[str, List[str]]] = None,
         method: str = "POST",
         payload: Dict[str, Any] = {},
         max_trials: int = 3,
         retry_delay: int = 1
-    ) -> Dict[str, Any]:
+    ) -> Union[Optional[Dict[str, Any]], List[Optional[Dict[str, Any]]]]:
 
         if self.device_mesh["tp"].get_local_rank() != 0:
             return
-            
+        
+        if isinstance(url, list):
+            return [
+                self._make_request(
+                    endpoint, u, method, payload, max_trials, retry_delay
+                )
+                for u in url
+            ]
+                
         for _ in range(max_trials):
             try:
                 if method == "POST":
@@ -179,7 +187,7 @@ class Rollout:
         train: bool,
         max_trials: int = 3,
         retry_delay: int = 1
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         
         payload = {
             "input_ids": states,
@@ -316,6 +324,9 @@ class Rollout:
             tbar = progress_bar(
                 total=prompts_per_rollout, desc="Rollout"
             )
+            self._make_request(
+                "continue_generation", self.worker_urls
+            )
             num_tasks_to_finish, first_iter, pendings = prompts_per_rollout, True, set()
             all_tensor_dicts, metrics = [], []
             while num_tasks_to_finish > 0:
@@ -325,7 +336,7 @@ class Rollout:
                     ):
                         pendings.add(
                             asyncio.create_task(
-                                self.group_rollout(data, train)
+                                self._group_rollout(data, train)
                             )
                         )
                 done, pendings = await asyncio.wait(
@@ -340,14 +351,10 @@ class Rollout:
                         all_tensor_dicts.extend(all_tensor_dicts_delta)
                         metrics.extend(metrics_delta)
 
-            while pendings:
-                for worker_url in self.worker_urls:
-                    self._make_request(
-                        "pause_generation", url=worker_url
-                    )
-                done, pendings = await asyncio.wait(
-                    pendings, timeout=1
-                ) # TODO: save done for next call
+            self._make_request(
+                "pause_generation", self.worker_urls
+            )
+            done, _ = await asyncio.wait(pendings) # TODO: save done for next call
 
             suffix = "train" if train else "test"
             metrics = {
@@ -395,7 +402,10 @@ class Rollout:
         return tensor_dict, cu_seqs
     
     @torch.no_grad()
-    def update(self, named_tensor_generator: Generator[Tuple[str, torch.Tensor]]):
+    def update(
+        self,
+        named_tensor_generator: Generator[Tuple[str, torch.Tensor], None, None]
+    ):
 
         torch.cuda.empty_cache()
         dist.barrier()
