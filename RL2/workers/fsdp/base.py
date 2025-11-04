@@ -152,7 +152,7 @@ class FSDPWorker(Worker):
 
     def _scale_loss(self, loss: torch.Tensor) -> torch.Tensor:
         # https://github.com/ChenmienTan/RL2/issues/11
-        return self.dp_size * self.config.cp_size * loss
+        return self.device_mesh["dp"].size() * self.config.cp_size * loss
     
     def _optimizer_step(self) -> int:
 
