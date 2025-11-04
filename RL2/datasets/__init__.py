@@ -8,4 +8,7 @@ from .base import (
 from .sft import SFTDataset
 from .rm import RMDataset
 from .dpo import DPODataset
-from .rl import RLDataset
+from .rl import (
+    ExperienceGroup,
+    RLDataset
+)
