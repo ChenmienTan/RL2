@@ -103,7 +103,6 @@ class Experience:
         self,
         async_generate_func: Callable,
         env_step_func: Callable,
-        train: bool,
         env_reset_func: Optional[Callable]
     ):
 
@@ -117,7 +116,7 @@ class Experience:
 
             abort = self._add_llm_response(
                 await async_generate_func(
-                    self.state_dict["states"], train
+                    self.state_dict["states"]
                 ) # TODO: perhaps less tokens
             )
             if abort:
@@ -171,14 +170,12 @@ class ExperienceGroup:
         self,
         async_generate_func: Callable,
         env_step_func: Callable,
-        train: bool,
         env_reset_func: Optional[Callable]
     ) -> "ExperienceGroup":
         await asyncio.gather(*(
             experience.make(
                 async_generate_func,
                 env_step_func,
-                train,
                 env_reset_func
             )
             for experience in self.experiences

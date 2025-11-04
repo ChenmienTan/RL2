@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Set, Sequence
+from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -8,6 +8,7 @@ import aiohttp
 import requests
 import importlib
 import multiprocessing
+from functools import partial
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
@@ -64,7 +65,7 @@ class Rollout:
                 config.server_args.model_path, trust_remote_code=True
             )
             self._launch_router_process()
-            self.experience_groups = []
+            self.experience_buffer = []
 
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
@@ -205,24 +206,6 @@ class Rollout:
                 except:
                     await asyncio.sleep(retry_delay)
 
-    def add_make_experience_tasks(
-        self,
-        pendings: Set[asyncio.Task],
-        experience_groups: Sequence[ExperienceGroup],
-        train: bool
-    ):
-        for experience_group in experience_groups:
-            pendings.add(
-                asyncio.create_task(
-                    experience_group.make(
-                        self._async_generate,
-                        self.env.step,
-                        train,
-                        getattr(self.env, "reset", None)
-                    )
-                )
-            )
-
     @time_logger("rollout")
     async def __call__(
         self,
@@ -232,6 +215,21 @@ class Rollout:
     ) -> Optional[Tuple[Optional[Dict[str, torch.Tensor]], Optional[torch.Tensor]]]:
 
         if dist.get_rank() == 0:
+
+            pendings = set()
+            def _add_make_experience_tasks(
+                experience_groups: Sequence[ExperienceGroup]
+            ):
+                for experience_group in experience_groups:
+                    pendings.add(
+                        asyncio.create_task(
+                            experience_group.make(
+                                partial(self._async_generate, train=train),
+                                self.env.step,
+                                getattr(self.env, "reset", None)
+                            )
+                        )
+                    )
 
             self._make_request(
                 "continue_generation", self.worker_urls
@@ -245,20 +243,19 @@ class Rollout:
             )
             num_tasks_to_finish = prompts_per_rollout
             first_iter = True
-            pendings = set()
+            
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
-            metrics: List[Dict[str, Union[List[float], List[int], List[bool]]]] = []
+            metrics: List[Dict[str, List[Union[float, int, bool]]]] = []
             if self.config.partial_rollout and train:
-                self.add_make_experience_tasks(
-                    pendings, self.experience_groups, train
+                _add_make_experience_tasks(
+                    self.experience_buffer
                 )
             while num_tasks_to_finish > 0:
                 if first_iter or (self.config.partial_rollout and train):
-                    experience_groups = dataloader(
-                        prompts_per_rollout - len(pendings)
-                    )
-                    self.add_make_experience_tasks(
-                        pendings, experience_groups, train
+                    _add_make_experience_tasks(
+                        dataloader(
+                            prompts_per_rollout - len(pendings)
+                        )
                     )
                 done, pendings = await asyncio.wait(
                     pendings, return_when=asyncio.FIRST_COMPLETED
@@ -278,7 +275,7 @@ class Rollout:
             )
             if pendings:
                 done, _ = await asyncio.wait(pendings)
-                self.experience_groups = [
+                self.experience_buffer = [
                     task.result() for task in done
                 ]
 
