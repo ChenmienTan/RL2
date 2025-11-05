@@ -63,7 +63,7 @@ class Experience:
         self.turn += 1
         # COMMENT: token-in-token-out
         meta_info = payload["meta_info"]
-        if len(meta_info.get("output_token_logprobs", [])) > 0:
+        if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3:
             logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
             self.state_dict["states"].extend(action)
             self.state_dict["actions"].extend(action)
@@ -130,7 +130,7 @@ class Experience:
     ):
         
         if self.done:
-            if not self.filter_offpolicy_data:
+            if not self.config.mask_offpolicy_data:
                 return
             self._initialize(
                 self.initial_state_text,
