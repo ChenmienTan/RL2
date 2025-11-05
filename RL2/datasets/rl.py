@@ -220,7 +220,7 @@ class ExperienceGroup:
         
         all_tensor_dicts, metrics = [], defaultdict(list)
         for experience in self.experiences:
-            tensor_dicts, metrics_delta = experience.to_tensor_dicts_and_metric()
+            tensor_dicts, metrics_delta = experience.to_tensor_dicts_and_metrics()
             all_tensor_dicts.append(tensor_dicts)
             for k, v in metrics_delta.items():
                 metrics[k].extend(v)
