@@ -1,7 +1,7 @@
 torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
-    train_data.max_new_tokens=1024 \
+    train_data.experience.max_new_tokens=1024 \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
     actor.max_length_per_device=8192 \
     rollout.train_prompts_per_rollout=64 \

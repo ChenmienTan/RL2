@@ -253,9 +253,7 @@ class Rollout:
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
             metrics: List[Dict[str, List[Union[float, int, bool]]]] = []
             if self.config.partial_rollout and train:
-                _add_make_experience_tasks(
-                    self.experience_buffer
-                )
+                _add_make_experience_tasks(self.experience_buffer)
             while num_tasks_to_finish > 0:
                 if first_iter or (self.config.partial_rollout and train):
                     _add_make_experience_tasks(
@@ -304,7 +302,7 @@ class Rollout:
 
         group_size = self.config.responses_per_prompt
         if group_size > 1 and self.config.dynamic_filtering:
-
+            # TODO: write this inside of dynamic sampling
             rewards = torch.FloatTensor([
                 sum([td["rewards"].sum().item() for td in tensor_dicts])
                 for tensor_dicts in all_tensor_dicts

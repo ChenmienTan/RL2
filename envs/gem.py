@@ -54,7 +54,7 @@ AVAILABLE_ENVS = deque(range(NUM_ENVS))
 SEMAPHORE = asyncio.Semaphore(NUM_ENVS)
 LOCK = asyncio.Lock()
 
-async def reset(extra_info):
+async def reset():
 
     await SEMAPHORE.acquire()
     async with LOCK:
@@ -62,7 +62,7 @@ async def reset(extra_info):
     
     state, _ = ENV_POOL[env_idx].reset()
     state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](state)
-    extra_info["env_idx"] = env_idx
+    extra_info = {"env_idx": env_idx}
     return state, extra_info
 
 async def step(state, action, extra_info):

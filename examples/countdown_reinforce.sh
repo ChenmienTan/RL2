@@ -2,7 +2,7 @@ torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
     train_data.path=train@Chenmien/Countdown \
-    train_data.max_new_tokens=1024 \
+    train_data.experience.max_new_tokens=1024 \
     test_data.path=test@Chenmien/Countdown \
     actor.model_name=Qwen/Qwen2.5-3B-Instruct \
     actor.max_length_per_device=8192 \

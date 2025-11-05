@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any, List, Union, Callable, Tuple
+from omegaconf import DictConfig
 import asyncio
 from copy import deepcopy
 from collections import defaultdict
@@ -12,16 +13,24 @@ class Experience:
 
     def __init__(
         self,
-        max_turns: int,
-        max_new_tokens: int,
+        config: DictConfig,
         tokenizer: AutoTokenizer,
         state_text: Optional[str],
         extra_info: Dict[str, Any]
     ):
 
-        self.max_turns = max_turns
-        self.max_new_tokens = max_new_tokens
+        self.config = config
         self.tokenizer = tokenizer
+        self._initialize(state_text, extra_info)
+
+        self.previous_action_text = ""
+        self.previous_response_length = 0
+
+        self.initial_state_text = state_text
+        self.initial_extra_info = deepcopy(extra_info)
+
+    def _initialize(self, state_text, extra_info):
+        
         self.state_text = state_text
         self.extra_info = extra_info
 
@@ -32,10 +41,8 @@ class Experience:
         self.rewards, self.scores = [], []
         self.metric = defaultdict(list)
 
-        self.previous_action_text = ""
-        self.previous_response_length = 0
         self.done = False
-    
+
     def _initialize_state_dict(
         self, state_text: str
     ) -> Dict[str, List[Union[int, float]]]:
@@ -51,11 +58,12 @@ class Experience:
 
     def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
 
+        # `previous_action_text` is not empty if aborted before
         self.action_text = self.previous_action_text + payload["text"]
         self.turn += 1
         # COMMENT: token-in-token-out
         meta_info = payload["meta_info"]
-        if len(meta_info["output_token_logprobs"]) > 0:
+        if len(meta_info.get("output_token_logprobs", [])) > 0:
             logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
             self.state_dict["states"].extend(action)
             self.state_dict["actions"].extend(action)
@@ -64,6 +72,13 @@ class Experience:
 
         finish_reason = meta_info["finish_reason"]["type"]
         if finish_reason == "abort":
+            if self.config.mask_offpolicy_data:
+                # previous actions are masked to guarantee fully onpolicy training
+                length = len(self.state_dict["states"])
+                self.state_dict["actions"] = length * [0]
+                self.state_dict["action_mask"] = length * [0]
+                self.state_dict["logps"] = length * [0.0]
+                self.state_dicts = self.state_dicts[:-1]
             self.previous_action_text = self.action_text
             self.previous_response_length += meta_info["completion_tokens"]
             return True
@@ -73,6 +88,7 @@ class Experience:
         )
         self.metric["length_clip_ratio"].append(finish_reason == "length")
 
+        # reset if not aborted
         self.previous_action_text = ""
         self.previous_response_length = 0
         return False
@@ -88,7 +104,7 @@ class Experience:
         self.rewards.append(payload["reward"])
         self.scores.append(payload["score"])
 
-        if self.turn == self.max_turns or payload["done"]:
+        if self.turn == self.config.max_turns or payload["done"]:
             self.state_dicts.append(self.state_dict)
             self.metric["n_turns"].append(self.turn)
             self.metric["reward"].append(sum(self.rewards))
@@ -112,11 +128,17 @@ class Experience:
         env_step_func: Callable,
         env_reset_func: Optional[Callable]
     ):
+        
+        if self.done:
+            if not self.filter_offpolicy_data:
+                return
+            self._initialize(
+                self.initial_state_text,
+                self.initial_extra_info
+            )
 
         if self.state_text is None:
-            self.state_text, self.extra_info = await env_reset_func(
-                self.extra_info
-            )
+            self.state_text, self.extra_info = await env_reset_func()
             self.state_dict = self._initialize_state_dict(self.state_text)
 
         while True:
@@ -124,27 +146,25 @@ class Experience:
             abort = self._add_llm_response(
                 await async_generate_func(
                     self.state_dict["states"],
-                    self.max_new_tokens - self.previous_response_length
+                    self.config.max_new_tokens - self.previous_response_length
                 )
             )
             if abort:
                 return
-            done = self._add_env_response(
+            self.done = self._add_env_response(
                 await env_step_func(
                     self.state_text,
                     self.action_text,
                     self.extra_info
                 )
             )
-            if done:
-                self.done = True
+            if self.done:
                 return
 
     def to_tensor_dicts_and_metric(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
 
         tensor_dicts = []
         for state_dict in self.state_dicts:
-            # TODO: remove sequences without actions
             tensor_dict = get_tensor_dict(
                 state_dict["states"],
                 state_dict["actions"],
@@ -164,9 +184,7 @@ class ExperienceGroup:
 
     def __init__(
         self,
-        group_size: int,
-        max_turns: int,
-        max_new_tokens: int,
+        config: DictConfig,
         tokenizer: AutoTokenizer,
         state_text: Optional[str],
         extra_info: Dict[str, Any]
@@ -174,13 +192,12 @@ class ExperienceGroup:
 
         self.experiences = [
             Experience(
-                max_turns,
-                max_new_tokens,
+                config,
                 tokenizer,
                 state_text,
                 deepcopy(extra_info)
             )
-            for _ in range(group_size)
+            for _ in range(config.responses_per_prompt)
         ]
 
     async def make(
@@ -196,7 +213,6 @@ class ExperienceGroup:
                 env_reset_func
             )
             for experience in self.experiences
-            if not experience.done
         ))
         return self
     
@@ -229,9 +245,7 @@ class RLDataset(BaseDataset):
 
         extra_info = ex.get("extra_info", {})
         return ExperienceGroup(
-            self.config.responses_per_prompt,
-            self.config.max_turns,
-            self.config.max_new_tokens,
+            self.config.experience,
             self.tokenizer,
             state_text,
             extra_info
