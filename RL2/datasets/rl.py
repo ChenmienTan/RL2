@@ -39,7 +39,7 @@ class Experience:
             self.state_dict = self._initialize_state_dict(state_text)
         self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
         self.rewards, self.scores = [], []
-        self.metric = defaultdict(list)
+        self.metrics = defaultdict(list)
 
         self.done = False
 
@@ -83,10 +83,10 @@ class Experience:
             self.previous_response_length += meta_info["completion_tokens"]
             return True
         
-        self.metric["response_length"].append(
+        self.metrics["response_length"].append(
             self.previous_response_length + meta_info["completion_tokens"]
         )
-        self.metric["length_clip_ratio"].append(finish_reason == "length")
+        self.metrics["length_clip_ratio"].append(finish_reason == "length")
 
         # reset if not aborted
         self.previous_action_text = ""
@@ -106,9 +106,9 @@ class Experience:
 
         if self.turn == self.config.max_turns or payload["done"]:
             self.state_dicts.append(self.state_dict)
-            self.metric["n_turns"].append(self.turn)
-            self.metric["reward"].append(sum(self.rewards))
-            self.metric["scores"].append(sum(self.scores))
+            self.metrics["n_turns"].append(self.turn)
+            self.metrics["reward"].append(sum(self.rewards))
+            self.metrics["scores"].append(sum(self.scores))
             return True
         if payload["next_state"].startswith(self.state_text + self.action_text):
             state_dict_delta = self._initialize_state_dict(
@@ -161,7 +161,7 @@ class Experience:
             if self.done:
                 return
 
-    def to_tensor_dicts_and_metric(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
+    def to_tensor_dicts_and_metrics(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
 
         tensor_dicts = []
         for state_dict in self.state_dicts:
@@ -177,7 +177,7 @@ class Experience:
                 state_dict["rewards"][1:]
             )
             tensor_dicts.append(tensor_dict)
-        return tensor_dicts, self.metric 
+        return tensor_dicts, self.metrics
 
 
 class ExperienceGroup:
@@ -216,13 +216,14 @@ class ExperienceGroup:
         ))
         return self
     
-    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], List[Dict[str, List[Union[float, int, bool]]]]]:
+    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[Union[float, int, bool]]]]:
         
-        all_tensor_dicts, metrics = [], []
+        all_tensor_dicts, metrics = [], defaultdict(list)
         for experience in self.experiences:
-            tensor_dicts, metric = experience.to_tensor_dicts_and_metric()
+            tensor_dicts, metrics_delta = experience.to_tensor_dicts_and_metric()
             all_tensor_dicts.append(tensor_dicts)
-            metrics.append(metric)
+            for k, v in metrics_delta.items():
+                metrics[k].extend(v)
         return all_tensor_dicts, metrics
 
 

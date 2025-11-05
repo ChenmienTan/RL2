@@ -9,6 +9,7 @@ import requests
 import importlib
 import multiprocessing
 from functools import partial
+from collections import defaultdict
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
@@ -251,7 +252,7 @@ class Rollout:
             first_iter = True
             
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
-            metrics: List[Dict[str, List[Union[float, int, bool]]]] = []
+            metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
             if self.config.partial_rollout and train:
                 _add_make_experience_tasks(self.experience_buffer)
             while num_tasks_to_finish > 0:
@@ -272,7 +273,8 @@ class Rollout:
                         experience_group = task.result()
                         all_tensor_dicts_delta, metrics_delta = experience_group.to_all_tensor_dicts_and_metrics()
                         all_tensor_dicts.extend(all_tensor_dicts_delta)
-                        metrics.extend(metrics_delta)
+                        for k, v in metrics_delta.items():
+                            metrics[k].extend(v)
 
             self._make_request(
                 "pause_generation", self.worker_urls
@@ -285,8 +287,7 @@ class Rollout:
 
             suffix = "train" if train else "test"
             metrics = {
-                f"{k}/{suffix}": sum([metric[k] for metric in metrics], [])
-                for k in metrics[0].keys()
+                f"{k}/{suffix}": v for k, v in metrics.items()
             }
             gather_and_log(metrics, step)
 
