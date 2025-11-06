@@ -73,12 +73,12 @@ class Experience:
         finish_reason = meta_info["finish_reason"]["type"]
         if finish_reason == "abort":
             if self.config.mask_offpolicy_data:
-                # previous actions are masked to guarantee fully onpolicy training
+                # mask previous actions to guarantee fully onpolicy training
                 length = len(self.state_dict["states"])
                 self.state_dict["actions"] = length * [0]
                 self.state_dict["action_mask"] = length * [0]
                 self.state_dict["logps"] = length * [0.0]
-                self.state_dicts = self.state_dicts[:-1]
+                self.state_dicts = self.state_dicts[-1:]
             self.previous_action_text = self.action_text
             self.previous_response_length += meta_info["completion_tokens"]
             return True
