@@ -68,6 +68,7 @@ class Rollout:
             self._launch_router_process()
             self.experience_buffer = []
 
+            # TODO: move this to experience
             self.train_sampling_params = OmegaConf.to_container(
                 config.train_sampling_params
             )
@@ -381,3 +382,4 @@ class Rollout:
             "resume_memory_occupation",
             payload={"tags": ["kv_cache"]}
         )
+        dist.barrier()
