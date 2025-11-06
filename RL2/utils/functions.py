@@ -50,7 +50,7 @@ def _compute_logsumexp(
     ], -1)
     return torch.logsumexp(logsumexps, -1)
 
-def _gather_action_logits(
+def gather_action_logits(
     logits: torch.Tensor,
     actions: torch.Tensor,
     process_group: dist.ProcessGroup
@@ -100,7 +100,7 @@ def compute_logps_and_entropy(
     return_entropy: bool = False
 ):  
     logsumexp = _compute_logsumexp(logits, process_group)
-    action_logits = _gather_action_logits(
+    action_logits = gather_action_logits(
         logits,
         minibatch["actions"],
         process_group

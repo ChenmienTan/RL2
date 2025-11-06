@@ -5,7 +5,7 @@ import torch
 from megatron.core import parallel_state as mpu
 from RL2.workers.megatron import MegatronWorker
 from RL2.utils.sequences import count_total, gather_along_cp
-from RL2.utils.functions import aggregate_values
+from RL2.utils.functions import gather_action_logits, aggregate_values
 from RL2.utils.algorithms import rm_loss, critic_ppo_loss
 from RL2.utils.logging import (
     time_logger,
@@ -20,10 +20,12 @@ class MegatronCritic(MegatronWorker):
     def __init__(self, config: DictConfig):
         super().__init__(config, True)
 
+        # Megatron-Bridge does not support loading and saving 
+        # classification model yet, so we use language model
         self.model = self.provider.provide_distributed_model(
             ddp_config=self.ddp_config,
             wrap_with_ddp=True
-        ) # TODO: make value model
+        )
         self._prepare_model_optimizer()
 
     @time_logger("compute_values")
@@ -45,7 +47,11 @@ class MegatronCritic(MegatronWorker):
             non_loss_data: bool = True
         ) -> Dict[str, torch.Tensor]:
 
-            minibatch["old_values"] = logits.squeeze(-1) * minibatch["action_mask"]
+            minibatch["old_values"] = gather_action_logits(
+                logits,
+                torch.zeros_like(minibatch["states"]),
+                mpu.get_tensor_model_parallel_group()
+            ) * minibatch["action_mask"]
             return gather_along_cp(
                 minibatch,
                 mpu.get_context_parallel_group(),
@@ -75,7 +81,11 @@ class MegatronCritic(MegatronWorker):
             logits: torch.Tensor
         ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
-            minibatch["values"] = logits.squeeze(-1) * minibatch["action_mask"]
+            minibatch["values"] = gather_action_logits(
+                logits,
+                torch.zeros_like(minibatch["states"]),
+                mpu.get_tensor_model_parallel_group()
+            ) * minibatch["action_mask"]
             minibatch = gather_along_cp(
                 minibatch,
                 mpu.get_context_parallel_group(),
@@ -116,7 +126,11 @@ class MegatronCritic(MegatronWorker):
                 logits: torch.Tensor
             ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
-                minibatch["values"] = logits.squeeze(-1) * minibatch["action_mask"]
+                minibatch["values"] = gather_action_logits(
+                    logits,
+                    torch.zeros_like(minibatch["states"]),
+                    mpu.get_tensor_model_parallel_group()
+                ) * minibatch["action_mask"]
                 minibatch = gather_along_cp(
                     minibatch,
                     mpu.get_context_parallel_group(),
