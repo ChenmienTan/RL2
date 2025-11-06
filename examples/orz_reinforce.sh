@@ -2,8 +2,8 @@ torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
     train_data.path=Chenmien/OpenReasonerZero \
-    train_data.experience.responses_per_prompt=64 \
-    train_data.experience.max_new_tokens=8192 \
+    train_data.responses_per_prompt=64 \
+    train_data.max_new_tokens=8192 \
     test_data.path=Chenmien/OlympiadBench \
     actor.model_name=Qwen/Qwen2.5-7B \
     actor.cp_size=2 \

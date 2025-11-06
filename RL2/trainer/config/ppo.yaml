@@ -6,22 +6,28 @@ defaults:
 
 train_data:
   path: null
-  experience:
-    responses_per_prompt: 1
-    max_turns: 1
+  responses_per_prompt: 1
+  max_turns: 1
+  mask_offpolicy_data: true
+  sampling_params:
+    temperature: 1.0
     max_new_tokens: null
-    mask_offpolicy_data: true
+    stop: null
+    no_stop_trim: true
 
 test_data:
   path: null
-  experience:
-    responses_per_prompt: 1
-    max_turns: ${train_data.experience.max_turns}
-    max_new_tokens: ${train_data.experience.max_new_tokens}
+  responses_per_prompt: 1
+  max_turns: ${train_data.max_turns}
+  sampling_params:
+    temperature: 0.0
+    max_new_tokens: ${train_data.sampling_params.max_new_tokens}
+    stop: ${train_data.sampling_params.stop}
+    no_stop_trim: ${train_data.sampling_params.no_stop_trim}
 
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}
-  temperature: ${rollout.train_sampling_params.temperature}
+  temperature: ${train_data.sampling_params.temperature}
   update_per_rollout: 1
   clip: 0.2
   tis_coef: 0.0
@@ -48,21 +54,12 @@ rollout:
     mem_fraction_static: 0.6
   train_prompts_per_rollout: null
   test_prompts_per_rollout: null
-  responses_per_prompt: ${train_data.experience.responses_per_prompt}
-  train_sampling_params:
-    temperature: 1.0
-    stop: null
-    no_stop_trim: true
-  test_sampling_params:
-    temperature: 0.0
-    stop: ${rollout.train_sampling_params.stop}
-    no_stop_trim: ${rollout.train_sampling_params.no_stop_trim}
   env_path: null
   partial_rollout: false
   dynamic_filtering: true
 
 ref_actor:
-  temperature: ${rollout.train_sampling_params.temperature}
+  temperature: ${train_data.sampling_params.temperature}
 
 critic:
   max_inference_length_per_device: ${critic.max_length_per_device}
@@ -75,7 +72,7 @@ adv:
   estimator: reinforce # `reinforce` or `gae`
   gamma: 1.0
   lamda: 1.0
-  responses_per_prompt: ${rollout.responses_per_prompt}
+  responses_per_prompt: ${train_data.responses_per_prompt}
   global_norm: false
   norm_var: false
   

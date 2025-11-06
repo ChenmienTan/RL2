@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, List, Union, Callable, Tuple
-from omegaconf import DictConfig
+from omegaconf import OmegaConf, DictConfig
 import asyncio
 from copy import deepcopy
 from collections import defaultdict
@@ -22,6 +22,9 @@ class Experience:
         self.config = config
         self.tokenizer = tokenizer
         self._initialize(state_text, extra_info)
+        self.sampling_params = OmegaConf.to_container(
+            config.sampling_params
+        )
 
         self.previous_action_text = ""
         self.previous_response_length = 0
@@ -57,7 +60,7 @@ class Experience:
         }
 
     def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
-
+        # TODO: payload may be None
         # `previous_action_text` is not empty if aborted before
         self.action_text = self.previous_action_text + payload["text"]
         self.turn += 1
@@ -107,7 +110,7 @@ class Experience:
         if self.turn == self.config.max_turns or payload["done"]:
             self.state_dicts.append(self.state_dict)
             self.metrics["n_turns"].append(self.turn)
-            self.metrics["reward"].append(sum(self.rewards))
+            self.metrics["rewards"].append(sum(self.rewards))
             self.metrics["scores"].append(sum(self.scores))
             return True
         if payload["next_state"].startswith(self.state_text + self.action_text):
@@ -146,7 +149,10 @@ class Experience:
             abort = self._add_llm_response(
                 await async_generate_func(
                     self.state_dict["states"],
-                    self.config.max_new_tokens - self.previous_response_length
+                    {
+                        **self.sampling_params,
+                        "max_new_tokens": self.sampling_params["max_new_tokens"] - self.previous_response_length
+                    }
                 )
             )
             if abort:
@@ -246,7 +252,7 @@ class RLDataset(BaseDataset):
 
         extra_info = ex.get("extra_info", {})
         return ExperienceGroup(
-            self.config.experience,
+            self.config,
             self.tokenizer,
             state_text,
             extra_info
