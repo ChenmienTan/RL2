@@ -2,6 +2,7 @@ torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
     train_data.path=Chenmien/OpenReasonerZero \
+    train_data.prompts_per_rollout=128 \
     train_data.responses_per_prompt=64 \
     train_data.sampling_params.max_new_tokens=8192 \
     test_data.path=Chenmien/OlympiadBench \
@@ -9,7 +10,6 @@ torchrun \
     actor.cp_size=2 \
     actor.max_length_per_device=8192 \
     actor.freeze_steps=4 \
-    rollout.train_prompts_per_rollout=128 \
     rollout.env_path=envs/orz.py \
     adv.estimator=gae \
     trainer.project=OpenReasonerZero \

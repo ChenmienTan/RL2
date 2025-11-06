@@ -6,8 +6,9 @@ defaults:
 
 train_data:
   path: null
+  prompts_per_rollout: null
   responses_per_prompt: 1
-  max_turns: 1
+  max_turns: 3
   mask_offpolicy_data: true
   sampling_params:
     temperature: 1.0
@@ -17,6 +18,7 @@ train_data:
 
 test_data:
   path: null
+  prompts_per_rollout: null
   responses_per_prompt: 1
   max_turns: ${train_data.max_turns}
   sampling_params:
@@ -52,8 +54,8 @@ rollout:
     dtype: ${actor.dtype}
     tp_size: 1
     mem_fraction_static: 0.6
-  train_prompts_per_rollout: null
-  test_prompts_per_rollout: null
+  train_prompts_per_rollout: ${train_data.prompts_per_rollout}
+  test_prompts_per_rollout: ${test_data.prompts_per_rollout}
   env_path: null
   partial_rollout: false
   dynamic_filtering: true
