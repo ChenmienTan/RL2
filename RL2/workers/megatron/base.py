@@ -51,7 +51,8 @@ class MegatronWorker(Worker):
             setattr(self.provider, k, v)
         self.provider.sequence_parallel = self.provider.tensor_model_parallel_size > 1
         self.provider.finalize()
-        self.provider.initialize_model_parallel(seed=42)
+        if not mpu.is_initialized():
+            self.provider.initialize_model_parallel(seed=42)
 
         self.ddp_config = DistributedDataParallelConfig(
             use_distributed_optimizer=True
