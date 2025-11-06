@@ -154,7 +154,7 @@ class MegatronActor(MegatronWorker):
     ):
         if step < self.config.freeze_steps:
             return
-        batches = self.scatter_data(tensor_dict, pack_minibatches=True)
+        batches = self._scatter_data(tensor_dict, pack_minibatches=True)
         self._load_model_to_gpu()
 
         for model in self.model:
