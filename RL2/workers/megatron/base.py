@@ -64,8 +64,9 @@ class MegatronWorker(Worker):
 
             optimizer_config = OmegaConf.to_container(self.config.optimizer)
             optimizer_config = OptimizerConfig(
-                bf16=True,
-                params_dtype=torch.bfloat16,
+                fp16=self.config.dtype == "float16",
+                bf16=self.config.dtype == "bfloat16",
+                params_dtype=getattr(torch, self.config.dtype),
                 use_distributed_optimizer=True,
                 **optimizer_config
             )
