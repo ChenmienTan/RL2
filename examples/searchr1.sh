@@ -25,7 +25,7 @@ torchrun \
     train_data.path=train@Chenmien/SearchR1 \
     train_data.responses_per_prompt=5 \
     train_data.max_turns=2 \
-    train_data.max_new_tokens=512 \
+    train_data.sampling_params.max_new_tokens=512 \
     test_data.path=test@Chenmien/SearchR1 \
     actor.model_name=Qwen/Qwen2.5-3B \
     actor.max_length_per_device=8192 \
