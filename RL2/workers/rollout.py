@@ -269,7 +269,11 @@ class Rollout:
                     )
                     for k, v in metrics_delta.items():
                         metrics[k].extend(v)
-                    if self.config.dynamic_filtering and torch.tensor(metrics_delta["rewards"]).std() == 0:
+                    if all([
+                        len(all_tensor_dicts_delta) > 1,
+                        self.config.dynamic_filtering,
+                        torch.tensor(metrics_delta["rewards"]).std() == 0
+                    ]):
                         filtered_prompts += 1
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)

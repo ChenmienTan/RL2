@@ -55,7 +55,7 @@ def _compute_reinforce_adv(
     
     rewards = tensor_dict["rewards"].sum(-1).view(-1, responses_per_prompt)
 
-    if global_norm:
+    if responses_per_prompt == 1 or global_norm:
         baseline = rewards.mean()
         std = rewards.std()
     else:
