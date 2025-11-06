@@ -59,11 +59,13 @@ class Experience:
             "rewards": len(state) * [0.0]
         }
 
-    def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
-        # TODO: payload may be None
+    def _add_llm_response(self, payload: Optional[Dict[str, Any]]) -> bool:
+        
+        if payload is None:
+            return True
+
         # `previous_action_text` is not empty if aborted before
         self.action_text = self.previous_action_text + payload["text"]
-        self.turn += 1
         # COMMENT: token-in-token-out
         meta_info = payload["meta_info"]
         if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3:
@@ -86,6 +88,7 @@ class Experience:
             self.previous_response_length += meta_info["completion_tokens"]
             return True
         
+        self.turn += 1
         self.metrics["response_length"].append(
             self.previous_response_length + meta_info["completion_tokens"]
         )
