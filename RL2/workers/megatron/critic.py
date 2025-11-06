@@ -35,7 +35,7 @@ class MegatronCritic(MegatronWorker):
         tensor_dict: Optional[Dict[str, torch.Tensor]],
         step: int
     ) -> Optional[Dict[str, torch.Tensor]]:
-        minibatches = self.scatter_data(tensor_dict)
+        minibatches = self._scatter_data(tensor_dict)
         self._load_model_to_gpu()
 
         for model in self.model:
