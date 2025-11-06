@@ -91,7 +91,7 @@ class FSDPActor(FSDPWorker):
         self.model.eval()
         processed_minibatches = []
         for minibatch in progress_bar(
-            minibatches, desc=f"Compute {prefix} logps"
+            minibatches, desc=f"Compute {prefix}logps"
         ):
             processed_minibatch = self._forward(minibatch, prefix)
             processed_minibatches.append(processed_minibatch)
