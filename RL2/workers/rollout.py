@@ -81,10 +81,8 @@ class Rollout:
 
     def _prepare_environment_variables(self):
 
-        # TODO: check whether this is required
         if "TORCHELASTIC_USE_AGENT_STORE" in os.environ.keys():
             del os.environ["TORCHELASTIC_USE_AGENT_STORE"]
-        monkey_patch_torch_reductions()
         cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         if cuda_visible_devices:
             cuda_visible_devices = cuda_visible_devices.split(",")
@@ -98,6 +96,7 @@ class Rollout:
             self.device_mesh["tp"].get_group(),
         )
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
+        monkey_patch_torch_reductions()
 
     def _prepare_environment(self):
 
