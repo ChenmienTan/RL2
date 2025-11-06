@@ -8,7 +8,6 @@ import aiohttp
 import requests
 import importlib
 import multiprocessing
-from functools import partial
 from collections import defaultdict
 import torch
 import torch.distributed as dist
@@ -66,15 +65,7 @@ class Rollout:
                 config.server_args.model_path, trust_remote_code=True
             )
             self._launch_router_process()
-            self.experience_buffer = []
-
-            # TODO: move this to experience
-            self.train_sampling_params = OmegaConf.to_container(
-                config.train_sampling_params
-            )
-            self.test_sampling_params = OmegaConf.to_container(
-                config.test_sampling_params
-            )
+            self.experience_buffer: List[ExperienceGroup] = []
 
     def _prepare_device_mesh(self):
 
@@ -186,17 +177,11 @@ class Rollout:
     async def _async_generate(
         self,
         states: List[int],
-        max_new_tokens: int,
-        train: bool,
+        sampling_params: Dict[str, Any],
         max_trials: int = 3,
         retry_delay: int = 1
     ) -> Optional[Dict[str, Any]]:
         
-        sampling_params = (
-            self.train_sampling_params
-            if train else self.test_sampling_params
-        )
-        sampling_params["max_new_tokens"] = max_new_tokens
         payload = {
             "input_ids": states,
             "sampling_params": sampling_params,
@@ -225,14 +210,15 @@ class Rollout:
         if dist.get_rank() == 0:
 
             pendings = set()
-            def _add_make_experience_tasks(
+            def _schedule_experience_tasks(
                 experience_groups: Sequence[ExperienceGroup]
             ):
+
                 for experience_group in experience_groups:
                     pendings.add(
                         asyncio.create_task(
                             experience_group.make(
-                                partial(self._async_generate, train=train),
+                                self._async_generate,
                                 self.env.step,
                                 getattr(self.env, "reset", None)
                             )
@@ -242,6 +228,7 @@ class Rollout:
             self._make_request(
                 "continue_generation", self.worker_urls
             )
+
             prompts_per_rollout = (
                 self.config.train_prompts_per_rollout if train else
                 self.config.test_prompts_per_rollout or len(dataloader)
@@ -249,47 +236,52 @@ class Rollout:
             tbar = progress_bar(
                 total=prompts_per_rollout, desc="Rollout"
             )
-            num_tasks_to_finish = prompts_per_rollout
+            experiences_to_done = prompts_per_rollout
+
             first_iter = True
-            
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
-            if self.config.partial_rollout and train:
-                _add_make_experience_tasks(self.experience_buffer)
-            while num_tasks_to_finish > 0:
-                if first_iter or (self.config.partial_rollout and train):
-                    _add_make_experience_tasks(
+
+            if train and self.config.partial_rollout:
+                _schedule_experience_tasks(self.experience_buffer)
+
+            while experiences_to_done > 0:
+
+                if first_iter or (train and self.config.partial_rollout):
+                    # fill schedulerd tasks to `prompts_per_rollout`
+                    _schedule_experience_tasks(
                         dataloader(
                             prompts_per_rollout - len(pendings)
                         )
                     )
+
                 done, pendings = await asyncio.wait(
                     pendings, return_when=asyncio.FIRST_COMPLETED
                 )
+
                 for task in done:
-                    if num_tasks_to_finish > 0:
+                    if experiences_to_done > 0:
                         tbar.update()
-                        num_tasks_to_finish -= 1
+                        experiences_to_done -= 1
                         first_iter = False # TODO: print when first_iter is True
                         experience_group = task.result()
-                        all_tensor_dicts_delta, metrics_delta = experience_group.to_all_tensor_dicts_and_metrics()
-                        all_tensor_dicts.extend(all_tensor_dicts_delta)
+                        all_tensor_dicts_delta, metrics_delta = (
+                            experience_group.to_all_tensor_dicts_and_metrics()
+                        )
                         for k, v in metrics_delta.items():
-                            metrics[k].extend(v)
+                            metrics[k].extend(v) # TODO: log dynamic filtering ratio
+                        if not self.config.dynamic_filtering or torch.tensor(metrics_delta["rewards"]).std() > 0:
+                            all_tensor_dicts.extend(all_tensor_dicts_delta)
 
             self._make_request(
                 "pause_generation", self.worker_urls
             )
             if pendings:
                 done, _ = await asyncio.wait(pendings)
-                self.experience_buffer = [
-                    task.result() for task in done
-                ]
+                self.experience_buffer = [task.result() for task in done]
 
             suffix = "train" if train else "test"
-            metrics = {
-                f"{k}/{suffix}": v for k, v in metrics.items()
-            }
+            metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
         dist.barrier()
@@ -301,23 +293,6 @@ class Rollout:
 
         if dist.get_rank() != 0:
             return None, None
-
-        group_size = self.config.responses_per_prompt
-        if group_size > 1 and self.config.dynamic_filtering:
-            # TODO: write this inside of dynamic sampling
-            rewards = torch.FloatTensor([
-                sum([td["rewards"].sum().item() for td in tensor_dicts])
-                for tensor_dicts in all_tensor_dicts
-            ]).view(-1, group_size)
-            are_filtered = rewards.std(-1) == 0
-            all_tensor_dicts = sum([
-                all_tensor_dicts[idx * group_size:(idx + 1) * group_size]
-                for idx, is_filtered in enumerate(are_filtered)
-                if not is_filtered
-            ], [])
-            wandb.log({
-                "dynamic_filtering_ratio": are_filtered.float().mean().item()
-            }, step=step)
 
         tensor_dicts: List[Dict[str, torch.Tensor]] = sum(all_tensor_dicts, [])
         tensor_dict: Dict[str, torch.Tensor] = pack_tensor_dicts(tensor_dicts)
