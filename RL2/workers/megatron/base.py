@@ -40,9 +40,11 @@ class MegatronWorker(Worker):
         self.bridge = AutoBridge.from_hf_pretrained(config.model_name)
 
         self.provider = self.bridge.to_megatron_provider()
-        assert config.dtype in ["float16", "bfloat16"], "Only `float16` and `bfloat16` is supported."
-        if config.dtype == "float16":
-            self.provider.fp16, self.provider.bf16 = True, False
+        
+        self.provider.params_dtype = getattr(torch, config.dtype)
+        self.provider.autocast_dtype = getattr(torch, config.dtype)
+        self.provider.fp16 = config.dtype == "float16"
+        self.provider.bf16 = config.dtype == "bfloat16"
         self.provider.attention_backend = "flash"
         tf_config = OmegaConf.to_container(config.tf_config)
         for k, v in tf_config.items():
