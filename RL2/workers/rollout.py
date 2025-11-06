@@ -238,7 +238,7 @@ class Rollout:
             )
             experiences_to_done = prompts_per_rollout
 
-            first_iter = True
+            first_iter, filtered_prompts = True, 0
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
@@ -254,25 +254,28 @@ class Rollout:
                             prompts_per_rollout - len(pendings)
                         )
                     )
+                first_iter = False
 
                 done, pendings = await asyncio.wait(
                     pendings, return_when=asyncio.FIRST_COMPLETED
                 )
 
                 for task in done:
-                    if experiences_to_done > 0:
-                        tbar.update()
-                        experiences_to_done -= 1
-                        first_iter = False # TODO: print when first_iter is True
-                        experience_group = task.result()
-                        all_tensor_dicts_delta, metrics_delta = (
-                            experience_group.to_all_tensor_dicts_and_metrics()
-                        )
-                        for k, v in metrics_delta.items():
-                            metrics[k].extend(v) # TODO: log dynamic filtering ratio
-                        if not self.config.dynamic_filtering or torch.tensor(metrics_delta["rewards"]).std() > 0:
-                            all_tensor_dicts.extend(all_tensor_dicts_delta)
-
+                    if experiences_to_done == 0:
+                        break
+                    tbar.update()
+                    experiences_to_done -= 1
+                    experience_group = task.result()
+                    all_tensor_dicts_delta, metrics_delta = (
+                        experience_group.to_all_tensor_dicts_and_metrics()
+                    )
+                    for k, v in metrics_delta.items():
+                        metrics[k].extend(v)
+                    if self.config.dynamic_filtering and torch.tensor(metrics_delta["rewards"]).std() == 0:
+                        filtered_prompts += 1
+                        continue
+                    all_tensor_dicts.extend(all_tensor_dicts_delta)
+            # TODO: maybe save `all_tensor_dicts`
             self._make_request(
                 "pause_generation", self.worker_urls
             )
@@ -280,6 +283,9 @@ class Rollout:
                 done, _ = await asyncio.wait(pendings)
                 self.experience_buffer = [task.result() for task in done]
 
+            metrics["dynamic_filtering_ratio"].append(
+                filtered_prompts / prompts_per_rollout
+            )
             suffix = "train" if train else "test"
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
