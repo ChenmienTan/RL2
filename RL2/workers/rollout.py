@@ -18,7 +18,6 @@ from sglang.srt.entrypoints.http_server_engine import launch_server_process
 from sglang.srt.utils import MultiprocessingSerializer
 from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from sglang_router.launch_router import RouterArgs, launch_router
-import wandb
 from RL2.datasets import (
     pack_tensor_dicts,
     StatefulCycleDataLoader,
