@@ -2,7 +2,6 @@ from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
-import base64
 import asyncio
 import aiohttp
 import requests
@@ -285,7 +284,7 @@ class Rollout:
             self._make_request(
                 "pause_generation", self.worker_urls
             )
-            if pendings:
+            if pendings: # TODO: no need to wait pendings to done
                 done, _ = await asyncio.wait(pendings)
                 self.experience_buffer = [task.result() for task in done]
 
@@ -327,8 +326,7 @@ class Rollout:
         dist.barrier()
         # or resume_memory_occupation() may OOM
         self._make_request(
-            "resume_memory_occupation",
-            payload={"tags": ["weights"]}
+            "resume_memory_occupation", payload={"tags": ["weights"]}
         )
 
         def _update_flattened_bucket(dtype_to_named_tensors):
@@ -381,7 +379,7 @@ class Rollout:
                 tensor = tensor.full_tensor()
             param_size = tensor.numel() * tensor.element_size()
 
-            if bucket_size > 0 and bucket_size + param_size > self.config.bucket_size:
+            if bucket_size > 0 and bucket_size + param_size > (self.config.bucket_size << 20):
 
                 _update_flattened_bucket(dtype_to_named_tensors)
                 dtype_to_named_tensors = defaultdict(list)
@@ -393,7 +391,6 @@ class Rollout:
         _update_flattened_bucket(dtype_to_named_tensors)
 
         self._make_request(
-            "resume_memory_occupation",
-            payload={"tags": ["kv_cache"]}
+            "resume_memory_occupation", payload={"tags": ["kv_cache"]}
         )
         dist.barrier()

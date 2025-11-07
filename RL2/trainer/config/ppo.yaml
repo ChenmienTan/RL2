@@ -59,6 +59,7 @@ rollout:
   env_path: null
   partial_rollout: false
   dynamic_filtering: true
+  bucket_size: 512
 
 ref_actor:
   temperature: ${train_data.sampling_params.temperature}
