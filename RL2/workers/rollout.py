@@ -32,9 +32,13 @@ from RL2.utils.logging import (
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-except ImportError: # older version of SGLang
+except ImportError:
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
+try:
+    from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
+except ImportError:
+    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
 
 class Rollout:
 
@@ -326,41 +330,68 @@ class Rollout:
             "resume_memory_occupation",
             payload={"tags": ["weights"]}
         )
-        
-        for name, tensor in named_tensor_generator:
-            # TODO: bucketize parameters to improve efficiency
-            tensor = tensor.to(torch.cuda.current_device())
-            serialized_tensor = MultiprocessingSerializer.serialize(
-                tensor.full_tensor() if isinstance(tensor, DTensor) else tensor
-            )
-            serialized_tensors = [
+
+        def _update_flattened_bucket(dtype_to_named_tensors):
+
+            torch.cuda.synchronize()
+            serialized_tensors = []
+            for _, named_tensors in dtype_to_named_tensors.items():
+
+                flattened_tensor_bucket = FlattenedTensorBucket(named_tensors)
+                flattened_tensor_data = {
+                    "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                    "metadata": flattened_tensor_bucket.get_metadata()
+                }
+                serialized_tensors.append(
+                    MultiprocessingSerializer.serialize(
+                        flattened_tensor_data, output_str=True
+                    )
+                )
+
+            gathered_serialized_tensors = [
                 None for _ in range(self.device_mesh["tp"].size())
             ] if self.device_mesh["tp"].get_local_rank() == 0 else None
             dist.gather_object(
-                serialized_tensor,
                 serialized_tensors,
+                gathered_serialized_tensors,
                 group_dst=0,
                 group=self.device_mesh["tp"].get_group(),
             )
-            if self.device_mesh["tp"].get_local_rank() == 0:
-                named_tensors = [
-                    (name, LocalSerializedTensor(values=serialized_tensors))
-                ]
-                serialized_named_tensors = [
-                    MultiprocessingSerializer.serialize(named_tensors)
-                    for _ in range(self.device_mesh["tp"].size())
-                ]
-                serialized_named_tensors = [
-                    base64.b64encode(snt).decode("utf-8")
-                    for snt in serialized_named_tensors
-                ]
+            num_dtypes = len(gathered_serialized_tensors[0])
+            for i in range(num_dtypes):
                 self._make_request(
                     "update_weights_from_tensor",
                     payload={
-                        "serialized_named_tensors": serialized_named_tensors,
+                        "serialized_named_tensors": [
+                            tensors[i] for tensors in gathered_serialized_tensors
+                        ],
+                        "load_format": "flattened_bucket",
                         "flush_cache": False
                     }
                 )
+        
+        dtype_to_named_tensors = defaultdict(list)
+        bucket_size = 0
+        for name, tensor in named_tensor_generator:
+
+            tensor = tensor.to(
+                torch.cuda.current_device(), non_blocking=True
+            )
+            if isinstance(tensor, DTensor):
+                tensor = tensor.full_tensor()
+            param_size = tensor.numel() * tensor.element_size()
+
+            if bucket_size > 0 and bucket_size + param_size > self.config.bucket_size:
+
+                _update_flattened_bucket(dtype_to_named_tensors)
+                dtype_to_named_tensors = defaultdict(list)
+                bucket_size = 0
+            
+            dtype_to_named_tensors[tensor.dtype].append((name, tensor))
+            bucket_size += param_size
+
+        _update_flattened_bucket(dtype_to_named_tensors)
+
         self._make_request(
             "resume_memory_occupation",
             payload={"tags": ["kv_cache"]}
