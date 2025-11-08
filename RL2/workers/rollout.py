@@ -159,7 +159,7 @@ class Rollout:
                 for u in url
             ]
                 
-        for _ in range(max_trials):
+        for trial in range(max_trials):
             try:
                 if method == "POST":
                     response = requests.post(
@@ -172,7 +172,9 @@ class Rollout:
                     )
                 response.raise_for_status()
                 return response
-            except:
+            except Exception:
+                if trial == max_trials - 1:
+                    raise
                 time.sleep(retry_delay)
 
     async def _async_generate(
@@ -190,14 +192,16 @@ class Rollout:
         }
 
         async with aiohttp.ClientSession() as session:
-            for _ in range(max_trials):
+            for trial in range(max_trials):
                 try:
                     async with session.post(
                         f"{self.router_url}/generate",
                         json=payload
                     ) as response:
                         return await response.json(content_type=None)
-                except:
+                except Exception:
+                    if trial == max_trials - 1:
+                        raise
                     await asyncio.sleep(retry_delay)
 
     @time_logger("rollout")

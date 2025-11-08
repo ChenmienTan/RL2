@@ -59,10 +59,7 @@ class Experience:
             "rewards": len(state) * [0.0]
         }
 
-    def _add_llm_response(self, payload: Optional[Dict[str, Any]]) -> bool:
-        
-        if payload is None:
-            return True
+    def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
 
         # `previous_action_text` is not empty if aborted before
         self.action_text = self.previous_action_text + payload["text"]
