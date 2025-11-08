@@ -41,8 +41,10 @@ class MegatronWorker(Worker):
 
         self.provider = self.bridge.to_megatron_provider()
         
-        self.provider.params_dtype = getattr(torch, config.dtype)
-        self.provider.autocast_dtype = getattr(torch, config.dtype)
+        dtype = getattr(torch, config.dtype)
+        self.provider.params_dtype = dtype
+        self.provider.autocast_dtype = dtype
+        self.provider.pipeline_dtype = dtype
         self.provider.fp16 = config.dtype == "float16"
         self.provider.bf16 = config.dtype == "bfloat16"
         self.provider.attention_backend = "flash"
