@@ -15,7 +15,6 @@ from transformers import AutoTokenizer
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server_engine import launch_server_process
 from sglang.srt.utils import MultiprocessingSerializer
-from sglang.srt.model_executor.model_runner import LocalSerializedTensor
 from sglang_router.launch_router import RouterArgs, launch_router
 from RL2.datasets import (
     pack_tensor_dicts,
@@ -38,6 +37,7 @@ try:
     from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
 except ImportError:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
+
 
 class Rollout:
 
@@ -318,8 +318,7 @@ class Rollout:
     
     @torch.no_grad()
     def update(
-        self,
-        named_tensor_generator: Generator[Tuple[str, torch.Tensor], None, None]
+        self, named_tensor_generator: Generator[Tuple[str, torch.Tensor], None, None]
     ):
 
         torch.cuda.empty_cache()
@@ -355,18 +354,21 @@ class Rollout:
                 group_dst=0,
                 group=self.device_mesh["tp"].get_group(),
             )
-            num_dtypes = len(gathered_serialized_tensors[0])
-            for i in range(num_dtypes):
-                self._make_request(
-                    "update_weights_from_tensor",
-                    payload={
-                        "serialized_named_tensors": [
-                            tensors[i] for tensors in gathered_serialized_tensors
-                        ],
-                        "load_format": "flattened_bucket",
-                        "flush_cache": False
-                    }
-                )
+            
+            if self.device_mesh["tp"].get_local_rank() == 0:
+
+                num_dtypes = len(gathered_serialized_tensors[0])
+                for i in range(num_dtypes):
+                    self._make_request(
+                        "update_weights_from_tensor",
+                        payload={
+                            "serialized_named_tensors": [
+                                tensors[i] for tensors in gathered_serialized_tensors
+                            ],
+                            "load_format": "flattened_bucket",
+                            "flush_cache": False
+                        }
+                    )
         
         dtype_to_named_tensors = defaultdict(list)
         bucket_size = 0
