@@ -75,8 +75,8 @@ class BaseDataset(Dataset):
         else: # Gym-like environments do not require datasets
             self.dataset = [{} for _ in range(42)]
 
-    def tokenize_prompt_response(
-        self, prompt: str, response: str, rm: bool=False
+    def _tokenize_prompt_response(
+        self, prompt: str, response: str, rm: bool = False
     ) -> Dict[str, torch.Tensor]:
         
         prompt = self.tokenizer.encode(
@@ -95,7 +95,7 @@ class BaseDataset(Dataset):
             states, actions, action_mask, self.config.max_length, rm
         )
 
-    def tokenize_messages(
+    def _tokenize_messages(
         self, messages: List[Dict[str, str]], rm: bool = False
     ) -> Dict[str, torch.Tensor]:
 
@@ -110,6 +110,7 @@ class BaseDataset(Dataset):
                 add_generation_prompt=is_next_turn_assistant,
                 tokenize=False
             )
+            # TODO: maybe tokenized to multiple sequences
             assert text[:len(prev_text)] == prev_text
             state = self.tokenizer.encode(
                 text[len(prev_text):], add_special_tokens=False
@@ -155,7 +156,7 @@ class StatefulCycleDataLoader(StatefulDataLoader):
 
 
 def get_dataloader(
-    dataset: BaseDataset, batch_size: Optional[int]=None
+    dataset: BaseDataset, batch_size: Optional[int] = None
 ) -> StatefulDataLoader:
 
     kwargs = {

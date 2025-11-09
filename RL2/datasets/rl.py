@@ -32,7 +32,11 @@ class Experience:
         self.initial_state_text = state_text
         self.initial_extra_info = deepcopy(extra_info)
 
-    def _initialize(self, state_text, extra_info):
+    def _initialize(
+        self,
+        state_text: Optional[str],
+        extra_info: Dict[str, Any]
+    ):
         
         self.state_text = state_text
         self.extra_info = extra_info

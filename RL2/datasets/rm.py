@@ -9,23 +9,23 @@ class RMDataset(BaseDataset):
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
-            chosen = self.tokenize_prompt_response(
+            chosen = self._tokenize_prompt_response(
                 ex["prompt"], ex["chosen"], rm=True
             )
-            rejected = self.tokenize_prompt_response(
+            rejected = self._tokenize_prompt_response(
                 ex["prompt"], ex["rejected"], rm=True
             )
-        else:
+        else: # TODO: directly use chosen_messages
             chosen_messages = ex["messages"] + [
                 {"role": "assistant", "content": ex["chosen"]}
             ]
             rejected_messages = ex["messages"] + [
                 {"role": "assistant", "content": ex["rejected"]}
             ]
-            chosen = self.tokenize_messages(
+            chosen = self._tokenize_messages(
                 chosen_messages, rm=True
             )
-            rejected = self.tokenize_messages(
+            rejected = self._tokenize_messages(
                 rejected_messages, rm=True
             )
         return chosen, rejected
