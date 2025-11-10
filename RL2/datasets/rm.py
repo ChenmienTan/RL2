@@ -29,7 +29,8 @@ class RMDataset(BaseDataset):
                 rejected_messages, rm=True
             )
             assert len(chosen) == len(rejected) == 1
-        return chosen[0], rejected[0]
+            chosen, rejected = chosen[0], rejected[0]
+        return chosen, rejected
     
     def collate_fn(
         self, all_tensor_dicts: Tuple[Tuple[Dict[str, torch.Tensor]]]
