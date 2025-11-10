@@ -69,7 +69,6 @@ class Rollout:
             self._launch_router_process()
 
             self.pendings: Set[asyncio.Task] = set()
-            self.experience_buffer: List[ExperienceGroup] = []
 
     def _prepare_device_mesh(self):
 
@@ -237,7 +236,7 @@ class Rollout:
                 # of next step rather than at the end of the last step so that 
                 # the time-consuming `env.step` can overlap with the training
                 done, self.pendings = await asyncio.wait(self.pendings)
-                self.experience_buffer = [task.result() for task in done]
+                experience_buffer = [task.result() for task in done]
             self._make_request("continue_generation", self.worker_urls)
 
             prompts_per_rollout = (
@@ -254,7 +253,7 @@ class Rollout:
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
             if train and self.config.partial_rollout:
-                self._schedule_experience_tasks(self.experience_buffer)
+                self._schedule_experience_tasks(experience_buffer)
 
             while experiences_to_done > 0:
 
