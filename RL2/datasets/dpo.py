@@ -24,4 +24,5 @@ class DPODataset(RMDataset):
             ]
             chosen = self._tokenize_messages(chosen_messages)
             rejected = self._tokenize_messages(rejected_messages)
-        return chosen, rejected
+            assert len(chosen) == len(rejected) == 1
+        return chosen[0], rejected[0]

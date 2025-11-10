@@ -28,13 +28,14 @@ class RMDataset(BaseDataset):
             rejected = self._tokenize_messages(
                 rejected_messages, rm=True
             )
-        return chosen, rejected
+            assert len(chosen) == len(rejected) == 1
+        return chosen[0], rejected[0]
     
     def collate_fn(
         self, all_tensor_dicts: Tuple[Tuple[Dict[str, torch.Tensor]]]
     ) -> Dict[str, torch.Tensor]:
         
-        tensor_dicts: List[Dict[str, torch.Tensor]] = sum(
-            [list(tds) for tds in all_tensor_dicts], []
-        )
+        tensor_dicts: List[Dict[str, torch.Tensor]] = [
+            td for tds in all_tensor_dicts for td in tds
+        ]
         return pack_tensor_dicts(tensor_dicts)

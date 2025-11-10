@@ -1,4 +1,4 @@
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 import torch
 from RL2.datasets import BaseDataset, pack_tensor_dicts
 
@@ -9,14 +9,18 @@ class SFTDataset(BaseDataset):
 
         ex = self.dataset[idx]
         if "prompt" in ex.keys():
-            tensor_dict = self._tokenize_prompt_response(
-                ex["prompt"], ex["response"]
-            )
+            tensor_dicts = [
+                self._tokenize_prompt_response(
+                    ex["prompt"], ex["response"]
+                )
+            ]
         else:
-            tensor_dict = self._tokenize_messages(ex["messages"])
-        return tensor_dict
+            tensor_dicts = self._tokenize_messages(ex["messages"])
+        return tensor_dicts
         
     def collate_fn(
-        self, tensor_dicts: Tuple[Dict[str, torch.Tensor]]
+        self, all_tensor_dicts: Tuple[List[Dict[str, torch.Tensor]]]
     ) -> Dict[str, torch.Tensor]:
+
+        tensor_dicts = [td for tds in all_tensor_dicts for td in tds]
         return pack_tensor_dicts(tensor_dicts)
