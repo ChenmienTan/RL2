@@ -15,18 +15,12 @@ class RMDataset(BaseDataset):
             rejected = self._tokenize_prompt_response(
                 ex["prompt"], ex["rejected"], rm=True
             )
-        else: # TODO: directly use chosen_messages
-            chosen_messages = ex["messages"] + [
-                {"role": "assistant", "content": ex["chosen"]}
-            ]
-            rejected_messages = ex["messages"] + [
-                {"role": "assistant", "content": ex["rejected"]}
-            ]
+        else:
             chosen = self._tokenize_messages(
-                chosen_messages, rm=True
+                ex["chosen"], rm=True
             )
             rejected = self._tokenize_messages(
-                rejected_messages, rm=True
+                ex["rejected"], rm=True
             )
             assert len(chosen) == len(rejected) == 1
             chosen, rejected = chosen[0], rejected[0]

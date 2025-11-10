@@ -88,11 +88,14 @@ Multi-turn is only supported by the latter format.
 ```json
 [
     {
-        "messages": [
-            {"role": "user", "content": "What is the capital of China?"}
+        "chosen": [
+            {"role": "user", "content": "What is the capital of China?"},
+            {"role": "assistant", "content": "Beijing."}
         ],
-        "chosen": "Beijing.",
-        "rejected": "Shanghai."
+        "rejected": [
+            {"role": "user", "content": "What is the capital of China?"},
+            {"role": "assistant", "content": "Shanghai."}
+        ]
     }
 ]
 ```
