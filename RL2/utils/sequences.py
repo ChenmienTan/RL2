@@ -69,11 +69,13 @@ def _tensor_dict_to_minibatches(
 
     if pair:
         partitions = [
-            sum([[2 * p, 2 * p + 1] for p in partition], [])
+            [_p for p in partition for _p in [2 * p, 2 * p + 1]]
             for partition in partitions
         ]
     global SHUFFLE_INDICES
-    SHUFFLE_INDICES = sum(partitions, [])
+    SHUFFLE_INDICES = [
+        p for partition in partitions for p in partition
+    ]
 
     return [
         {

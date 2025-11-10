@@ -307,7 +307,9 @@ class Rollout:
         if dist.get_rank() != 0:
             return None, None
 
-        tensor_dicts: List[Dict[str, torch.Tensor]] = sum(all_tensor_dicts, [])
+        tensor_dicts: List[Dict[str, torch.Tensor]] = [
+            td for tds in all_tensor_dicts for td in tds
+        ]
         tensor_dict: Dict[str, torch.Tensor] = pack_tensor_dicts(tensor_dicts)
         seqs = torch.LongTensor([
             len(tensor_dicts) for tensor_dicts in all_tensor_dicts

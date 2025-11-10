@@ -53,4 +53,8 @@ def gather_and_concat_list(
         group=process_group,
         group_dst=0
     )
-    return sum(lists, []) if dist.get_rank(process_group) == 0 else None
+    return (
+        [item for lst in lists for item in lst]
+        if dist.get_rank(process_group) == 0
+        else None
+    )

@@ -262,7 +262,7 @@ class MegatronWorker(Worker):
                 model.zero_grad_buffer()
             self.scheduler.step(1)
             metrics = {
-                k: sum([metric[k] for metric in output], [])
+                k: [item for metric in output for item in metric[k]]
                 for k in output[0].keys()
             }
             return metrics, grad_norm
