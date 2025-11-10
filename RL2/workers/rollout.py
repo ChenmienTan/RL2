@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
+from typing import Set, Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -67,6 +67,8 @@ class Rollout:
                 config.server_args.model_path, trust_remote_code=True
             )
             self._launch_router_process()
+
+            self.pendings: Set[asyncio.Task] = set()
             self.experience_buffer: List[ExperienceGroup] = []
 
     def _prepare_device_mesh(self):
@@ -125,7 +127,6 @@ class Rollout:
 
         router_args = RouterArgs(
             worker_urls=self.worker_urls,
-            policy="cache_aware",
             host=get_host(),
             port=get_available_port(),
             log_level="error"
@@ -146,7 +147,7 @@ class Rollout:
         payload: Dict[str, Any] = {},
         max_trials: int = 3,
         retry_delay: int = 1
-    ) -> Union[Optional[Dict[str, Any]], List[Optional[Dict[str, Any]]]]:
+    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
 
         if self.device_mesh["tp"].get_local_rank() != 0:
             return
@@ -183,7 +184,7 @@ class Rollout:
         sampling_params: Dict[str, Any],
         max_trials: int = 3,
         retry_delay: int = 1
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         
         payload = {
             "input_ids": states,
@@ -204,6 +205,22 @@ class Rollout:
                         raise
                     await asyncio.sleep(retry_delay)
 
+    def _schedule_experience_tasks(
+        self,
+        experience_groups: Sequence[ExperienceGroup]
+    ):
+
+        for experience_group in experience_groups:
+            self.pendings.add(
+                asyncio.create_task(
+                    experience_group.make(
+                        self._async_generate,
+                        self.env.step,
+                        getattr(self.env, "reset", None)
+                    )
+                )
+            )
+
     @time_logger("rollout")
     async def __call__(
         self,
@@ -214,25 +231,14 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
-            pendings = set()
-            def _schedule_experience_tasks(
-                experience_groups: Sequence[ExperienceGroup]
-            ):
-
-                for experience_group in experience_groups:
-                    pendings.add(
-                        asyncio.create_task(
-                            experience_group.make(
-                                self._async_generate,
-                                self.env.step,
-                                getattr(self.env, "reset", None)
-                            )
-                        )
-                    )
-
-            self._make_request(
-                "continue_generation", self.worker_urls
-            )
+            if self.pendings:
+                # Flush pendings to avoid tasks in previous steps calling the
+                # inference engine. We wait for tasks to finish at the begining 
+                # of next step rather than at the end of the last step so that 
+                # the time-consuming `env.step` can overlap with the training
+                done, self.pendings = await asyncio.wait(self.pendings)
+                self.experience_buffer = [task.result() for task in done]
+            self._make_request("continue_generation", self.worker_urls)
 
             prompts_per_rollout = (
                 self.config.train_prompts_per_rollout if train else
@@ -248,21 +254,19 @@ class Rollout:
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
             if train and self.config.partial_rollout:
-                _schedule_experience_tasks(self.experience_buffer)
+                self._schedule_experience_tasks(self.experience_buffer)
 
             while experiences_to_done > 0:
 
                 if first_iter or (train and self.config.partial_rollout):
-                    # fill schedulerd tasks to `prompts_per_rollout`
-                    _schedule_experience_tasks(
-                        dataloader(
-                            prompts_per_rollout - len(pendings)
-                        )
+                    experience_groups = dataloader(
+                        prompts_per_rollout - len(self.pendings)
                     )
+                    self._schedule_experience_tasks(experience_groups)
                 first_iter = False
 
-                done, pendings = await asyncio.wait(
-                    pendings, return_when=asyncio.FIRST_COMPLETED
+                done, self.pendings = await asyncio.wait(
+                    self.pendings, return_when=asyncio.FIRST_COMPLETED
                 )
 
                 for task in done:
@@ -285,12 +289,7 @@ class Rollout:
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
             # TODO: maybe save `all_tensor_dicts`
-            self._make_request(
-                "pause_generation", self.worker_urls
-            )
-            if pendings: # TODO: no need to wait pendings to done
-                done, _ = await asyncio.wait(pendings)
-                self.experience_buffer = [task.result() for task in done]
+            self._make_request("pause_generation", self.worker_urls)
 
             metrics["dynamic_filtering_ratio"].append(
                 filtered_prompts / prompts_per_rollout
@@ -332,7 +331,9 @@ class Rollout:
             "resume_memory_occupation", payload={"tags": ["weights"]}
         )
 
-        def _update_flattened_bucket(dtype_to_named_tensors):
+        def _update_tensor_bucket(
+            dtype_to_named_tensors: Dict[torch.dtype, List[Tuple[str, torch.Tensor]]]
+        ):
 
             torch.cuda.synchronize()
             serialized_tensors = []
@@ -387,14 +388,14 @@ class Rollout:
 
             if bucket_size > 0 and bucket_size + param_size > (self.config.bucket_size << 20):
 
-                _update_flattened_bucket(dtype_to_named_tensors)
+                _update_tensor_bucket(dtype_to_named_tensors)
                 dtype_to_named_tensors = defaultdict(list)
                 bucket_size = 0
             
             dtype_to_named_tensors[tensor.dtype].append((name, tensor))
             bucket_size += param_size
 
-        _update_flattened_bucket(dtype_to_named_tensors)
+        _update_tensor_bucket(dtype_to_named_tensors)
 
         self._make_request(
             "resume_memory_occupation", payload={"tags": ["kv_cache"]}
