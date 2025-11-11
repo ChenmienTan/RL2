@@ -8,22 +8,26 @@ class RMDataset(BaseDataset):
     def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor]]:
 
         ex = self.dataset[idx]
-        if "prompt" in ex.keys():
-            chosen = self._tokenize_prompt_response(
-                ex["prompt"], ex["chosen"], rm=True
-            )
-            rejected = self._tokenize_prompt_response(
-                ex["prompt"], ex["rejected"], rm=True
-            )
-        else:
+        if self.config.apply_chat_template:
             chosen = self._tokenize_messages(
-                ex["chosen"], rm=True
+                ex[self.config.chosen_key], rm=True
             )
             rejected = self._tokenize_messages(
-                ex["rejected"], rm=True
+                ex[self.config.rejected_key], rm=True
             )
             assert len(chosen) == len(rejected) == 1
             chosen, rejected = chosen[0], rejected[0]
+        else:
+            chosen = self._tokenize_prompt_response(
+                ex[self.config.prompt_key],
+                ex[self.config.chosen_key],
+                rm=True
+            )
+            rejected = self._tokenize_prompt_response(
+                ex[self.config.prompt_key],
+                ex[self.config.rejected_key], 
+                rm=True
+            )
         return chosen, rejected
     
     def collate_fn(

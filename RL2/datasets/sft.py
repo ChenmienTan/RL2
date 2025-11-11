@@ -8,14 +8,17 @@ class SFTDataset(BaseDataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
 
         ex = self.dataset[idx]
-        if "prompt" in ex.keys():
+        if self.config.apply_chat_template:
+            tensor_dicts = self._tokenize_messages(
+                ex[self.config.messages_key]
+            )
+        else:
             tensor_dicts = [
                 self._tokenize_prompt_response(
-                    ex["prompt"], ex["response"]
+                    ex[self.config.prompt_key],
+                    ex[self.config.response_key]
                 )
             ]
-        else:
-            tensor_dicts = self._tokenize_messages(ex["messages"])
         return tensor_dicts
         
     def collate_fn(

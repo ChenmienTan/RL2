@@ -15,6 +15,9 @@ train_data:
     max_new_tokens: null
     stop: null
     no_stop_trim: true
+  prompt_key: prompt
+  messages_key: messages
+  apply_chat_template: true
 
 test_data:
   path: null
@@ -26,6 +29,9 @@ test_data:
     max_new_tokens: ${train_data.sampling_params.max_new_tokens}
     stop: ${train_data.sampling_params.stop}
     no_stop_trim: ${train_data.sampling_params.no_stop_trim}
+  prompt_key: ${train_data.prompt_key}
+  messages_key: ${train_data.messages_key}
+  apply_chat_template: ${train_data.apply_chat_template}
 
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}

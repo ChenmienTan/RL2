@@ -7,6 +7,10 @@ data:
   path: null
   max_length: null
   batch_size: 128
+  prompt_key: prompt
+  chosen_key: chosen
+  rejected_key: rejected
+  apply_chat_template: true
 
 actor:
   beta: 0.1

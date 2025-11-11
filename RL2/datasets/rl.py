@@ -243,16 +243,16 @@ class RLDataset(BaseDataset):
 
         ex = self.dataset[idx]
 
-        if "prompt" in ex.keys():
-            state_text = ex["prompt"]
-        elif "messages" in ex.keys():
+        if not self.config.path:
+            state_text = None
+        elif self.config.apply_chat_template:
             state_text = self.tokenizer.apply_chat_template(
-                ex["messages"],
+                ex[self.config.messages_key],
                 add_generation_prompt=True,
                 tokenize=False
             )
         else:
-            state_text = None
+            state_text = ex[self.config.prompt_key]
 
         extra_info = ex.get("extra_info", {})
         return ExperienceGroup(
