@@ -1,6 +1,6 @@
 model_name: null
 use_liger_kernel: false
-dtype: float16
+dtype: bfloat16
 enable_gradient_checkpointing: true
 ddp_size: 1
 tp_size: 1
