@@ -127,7 +127,7 @@ class MegatronWorker(Worker):
     def _gather_data(
         self, minibatches: List[Dict[str, torch.Tensor]]
     ) -> Optional[Dict[str, torch.Tensor]]:
-        return gather_data(minibatches, mpu.get_data_parallel_group())
+        return gather_data(minibatches, mpu.get_data_parallel_group_gloo())
 
     def _offload_model_to_cpu(self):
 

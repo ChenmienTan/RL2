@@ -108,7 +108,7 @@ class MegatronActor(MegatronWorker):
 
         metrics, grad_norm = self._forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
-        gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        gather_and_log(metrics, step, mpu.get_data_parallel_group_gloo())
 
     @time_logger("update_actor")
     def dpo_update(
@@ -145,7 +145,7 @@ class MegatronActor(MegatronWorker):
 
         metrics, grad_norm = self._forward_backward(f, minibatches)
         metrics["grad_norm"] = [grad_norm]
-        gather_and_log(metrics, step, mpu.get_data_parallel_group())
+        gather_and_log(metrics, step, mpu.get_data_parallel_group_gloo())
 
     @time_logger("update_actor")
     def ppo_update(
@@ -208,7 +208,7 @@ class MegatronActor(MegatronWorker):
             metric, grad_norm = self._forward_backward(f, batch)
             for k, v in metric.items():
                 metrics[k].append(
-                    gather_and_reduce(v, mpu.get_data_parallel_group())
+                    gather_and_reduce(v, mpu.get_data_parallel_group_gloo())
                 )
             metrics["actor/grad_norm"].append(grad_norm)
 
