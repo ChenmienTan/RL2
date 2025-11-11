@@ -82,9 +82,10 @@ class FSDPActor(FSDPWorker):
     def compute_logps(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
-        step: int
+        step: int,
+        pair: bool = False
     ) -> Optional[Dict[str, torch.Tensor]]:
-        minibatches = self._scatter_data(tensor_dict)
+        minibatches = self._scatter_data(tensor_dict, pair=pair)
         self._load_model_to_device(torch.cuda.current_device())
 
         prefix = "old_" if self.train else "ref_"

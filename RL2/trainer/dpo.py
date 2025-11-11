@@ -39,7 +39,7 @@ class DPOTrainer(Trainer):
                 initial=step % len(self.train_dataloader)
             ):
                 step += 1
-                tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
+                tensor_dict = self.ref_actor.compute_logps(tensor_dict, step, True)
                 self.actor.dpo_update(tensor_dict, step)
                 self.save_ckpt((self.actor,), step)
         self.save_model((self.actor,))
