@@ -149,7 +149,7 @@ def dpo_loss(
 
 def actor_ppo_loss(
     config: DictConfig, minibatch: Dict[str, torch.Tensor]
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
     ratio = torch.exp(
         minibatch["logps"] - minibatch.get(
@@ -165,6 +165,12 @@ def actor_ppo_loss(
     clipped_objective = minibatch["advantages"] * clipped_ratio
     losses = - torch.min(objective, clipped_objective)
     clip_ratios = objective > clipped_objective
+
+    llm_old_approx_kl = compute_approx_kl(
+        minibatch["llm_logps"],
+        minibatch.get("old_logps", minibatch["logps"].detach()),
+        config.kl.reward_estimator
+    )
 
     if config.kl.coef > 0 and config.kl.type == "loss":
         kl_losses = compute_approx_kl(
@@ -182,7 +188,7 @@ def actor_ppo_loss(
         losses *= tis
 
     losses = losses - config.entropy.coef * minibatch["entropy"]
-    return losses, clip_ratios
+    return losses, clip_ratios, llm_old_approx_kl
 
 def critic_ppo_loss(
     config: DictConfig, minibatch: Dict[str, torch.Tensor]

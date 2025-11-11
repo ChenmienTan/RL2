@@ -190,10 +190,12 @@ class FSDPActor(FSDPWorker):
                 minibatch = self._forward(
                     minibatch, return_entropy=True
                 )
-                losses, clip_ratios = actor_ppo_loss(self.config, minibatch)
+                losses, clip_ratios, llm_old_approx_kl = actor_ppo_loss(
+                    self.config, minibatch
+                )
                     
-                loss, clip_ratio, entropy = aggregate_values(
-                    (losses, clip_ratios, minibatch["entropy"]),
+                loss, clip_ratio, llm_old_approx_kl, entropy = aggregate_values(
+                    (losses, clip_ratios, llm_old_approx_kl, minibatch["entropy"]),
                     minibatch["action_mask"],
                     self.config.avg_level,
                     total_actions,
@@ -206,6 +208,7 @@ class FSDPActor(FSDPWorker):
                 metric["actor/entropy"].append(entropy.item())
                 metric["actor/loss"].append(loss.item())
                 metric["actor/clip_ratio"].append(clip_ratio.item())
+                metric["actor/llm_old_approx_kl"].append(llm_old_approx_kl.item())
 
             grad_norm = self._optimizer_step()
 

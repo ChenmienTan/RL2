@@ -64,21 +64,15 @@ class PPOTrainer(Trainer):
         )
         if self.config.actor.kl.type == "reward":
             tensor_dict["rewards"] -= self.config.actor.kl.coef * old_ref_approx_kl
-        llm_old_approx_kl = compute_approx_kl(
-            tensor_dict["llm_logps"],
-            tensor_dict["old_logps"],
-            self.config.actor.kl.reward_estimator
-        )
-        old_ref_approx_kl, llm_old_approx_kl = aggregate_values(
-            (old_ref_approx_kl, llm_old_approx_kl),
+        old_ref_approx_kl = aggregate_values(
+            old_ref_approx_kl,
             tensor_dict["action_mask"],
             self.config.actor.avg_level,
             tensor_dict["action_mask"].sum(),
             tensor_dict["states"].shape[0]
         )
         wandb.log({
-            "actor/old_ref_approx_kl": old_ref_approx_kl.item(),
-            "actor/llm_old_approx_kl": llm_old_approx_kl.item()
+            "actor/old_ref_approx_kl": old_ref_approx_kl.item()
         }, step=step)
             
     async def train(self):

@@ -187,10 +187,12 @@ class MegatronActor(MegatronWorker):
                     cu_seqlens
                 )
 
-                losses, clip_ratios = actor_ppo_loss(self.config, minibatch)
+                losses, clip_ratios, llm_old_approx_kl = actor_ppo_loss(
+                    self.config, minibatch
+                )
 
-                loss, clip_ratio, entropy = aggregate_values(
-                    (losses, clip_ratios, minibatch["entropy"]),
+                loss, clip_ratio, llm_old_approx_kl, entropy = aggregate_values(
+                    (losses,  clip_ratios, llm_old_approx_kl, minibatch["entropy"]),
                     minibatch["action_mask"],
                     self.config.avg_level,
                     total_actions,
@@ -201,6 +203,7 @@ class MegatronActor(MegatronWorker):
                     "actor/entropy": [entropy.item()],
                     "actor/loss": [loss.item()],
                     "actor/clip_ratio": [clip_ratio.item()],
+                    "actor/llm_old_approx_kl": [llm_old_approx_kl.item()],
                 }
 
                 return self._scale_loss(loss), metric
