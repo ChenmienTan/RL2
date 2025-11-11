@@ -279,11 +279,11 @@ class Rollout:
                     )
                     for k, v in metrics_delta.items():
                         metrics[k].extend(v)
-                    if all([
-                        len(all_tensor_dicts_delta) > 1,
-                        self.config.dynamic_filtering,
+                    if (
+                        len(all_tensor_dicts_delta) > 1 and
+                        self.config.dynamic_filtering and
                         torch.tensor(metrics_delta["rewards"]).std() == 0
-                    ]):
+                    ):
                         filtered_prompts += 1
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
@@ -365,6 +365,8 @@ class Rollout:
 
                 num_dtypes = len(gathered_serialized_tensors[0])
                 for i in range(num_dtypes):
+                    # HTTP server only sends meta data. Actual weights will be directly 
+                    # copied from GPUs
                     self._make_request(
                         "update_weights_from_tensor",
                         payload={
