@@ -10,6 +10,8 @@ tf_config:
   recompute_granularity: full
   recompute_method: uniform
   recompute_num_layers: 1
+ddp_config:
+  use_distributed_optimizer: true
 max_length_per_device: null
 optimizer:
   lr: 5e-6

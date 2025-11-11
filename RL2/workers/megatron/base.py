@@ -56,9 +56,8 @@ class MegatronWorker(Worker):
         if not mpu.is_initialized():
             self.provider.initialize_model_parallel(seed=42)
 
-        self.ddp_config = DistributedDataParallelConfig(
-            use_distributed_optimizer=True
-        )
+        ddp_config = OmegaConf.to_container(config.ddp_config)
+        self.ddp_config = DistributedDataParallelConfig(**ddp_config)
 
     def _prepare_model_optimizer(self):
 
@@ -72,7 +71,7 @@ class MegatronWorker(Worker):
                 fp16=self.config.dtype == "float16",
                 bf16=self.config.dtype == "bfloat16",
                 params_dtype=getattr(torch, self.config.dtype),
-                use_distributed_optimizer=True,
+                use_distributed_optimizer=self.config.ddp_config.use_distributed_optimizer,
                 **optimizer_config
             )
             self.optimizer = get_megatron_optimizer(
