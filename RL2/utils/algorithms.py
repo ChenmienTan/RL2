@@ -2,7 +2,9 @@ from typing import Dict, Tuple, List
 from omegaconf import DictConfig
 import torch
 import torch.nn.functional as F
+import wandb
 from RL2.datasets import pack_tensor_dicts
+from RL2.utils.functions import aggregate_values
 from RL2.utils.logging import time_logger
 
 def compute_approx_kl(
@@ -79,7 +81,30 @@ def compute_advantages(
     step: int
 ):
 
-    def extract_actions(
+    if config.actor.kl.coef > 0:
+        
+        old_ref_approx_kl = compute_approx_kl(
+            tensor_dict["old_logps"],
+            tensor_dict["ref_logps"],
+            config.actor.kl.reward_estimator
+        )
+        wandb.log(
+            {
+                "actor/old_ref_approx_kl": aggregate_values(
+                    old_ref_approx_kl,
+                    tensor_dict["action_mask"],
+                    config.actor.avg_level,
+                    tensor_dict["action_mask"].sum(),
+                    tensor_dict["states"].shape[0]
+                ).item()
+            },
+            step=step
+        )
+
+        if config.actor.kl.type == "reward":
+            tensor_dict["rewards"] -= config.actor.kl.coef * old_ref_approx_kl
+
+    def _extract_actions(
         tensor_dict: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
 
@@ -90,7 +115,7 @@ def compute_advantages(
         }
     # COMMENT: non-concat state transition
     processed_tensor_dict = pack_tensor_dicts([
-        extract_actions(
+        _extract_actions(
             {
                 k: v[start:end]
                 for k, v in tensor_dict.items()
@@ -99,16 +124,16 @@ def compute_advantages(
         for start, end in zip(cu_seqs[:-1], cu_seqs[1:])
     ])
 
-    if config.estimator == "gae":
+    if config.adv.estimator == "gae":
         tensor_dict_delta = _compute_gae(
-            processed_tensor_dict, config.gamma, config.lamda
+            processed_tensor_dict, config.adv.gamma, config.adv.lamda
         )
-    elif config.estimator == "reinforce":
+    elif config.adv.estimator == "reinforce":
         tensor_dict_delta = _compute_reinforce_adv(
             processed_tensor_dict,
-            config.responses_per_prompt,
-            config.global_norm,
-            config.norm_var
+            config.adv.responses_per_prompt,
+            config.adv.global_norm,
+            config.adv.norm_var
         )
     else:
         raise NotImplementedError
@@ -120,6 +145,9 @@ def compute_advantages(
         ):
             indices = torch.where(tensor_dict["action_mask"][start:end])
             tensor_dict[k][start:end][indices] = v[idx][:len(indices[0])]
+
+    if config.actor.kl.coef > 0 and config.actor.kl.type == "advantage":
+        tensor_dict["advantages"] -= config.actor.kl.coef * old_ref_approx_kl
 
 def rm_loss(
     minibatch: Dict[str, torch.Tensor]

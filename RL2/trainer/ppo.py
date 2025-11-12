@@ -15,11 +15,7 @@ from RL2.workers import (
     initialize_rollout
 )
 from RL2.utils.communication import initialize_global_process_group
-from RL2.utils.functions import aggregate_values
-from RL2.utils.algorithms import (
-    compute_approx_kl, compute_advantages
-)
-from RL2.utils.logging import time_logger
+from RL2.utils.algorithms import compute_advantages
 
 
 class PPOTrainer(Trainer):
@@ -51,29 +47,6 @@ class PPOTrainer(Trainer):
         )
 
         return get_dataloader(dataset)
-    
-    @time_logger("compute_approx_kl")
-    def _compute_approx_kl(
-        self, tensor_dict: Dict[str, torch.Tensor], step: int
-    ):
-
-        old_ref_approx_kl = compute_approx_kl(
-            tensor_dict["old_logps"],
-            tensor_dict["ref_logps"],
-            self.config.actor.kl.reward_estimator
-        )
-        if self.config.actor.kl.type == "reward":
-            tensor_dict["rewards"] -= self.config.actor.kl.coef * old_ref_approx_kl
-        old_ref_approx_kl = aggregate_values(
-            old_ref_approx_kl,
-            tensor_dict["action_mask"],
-            self.config.actor.avg_level,
-            tensor_dict["action_mask"].sum(),
-            tensor_dict["states"].shape[0]
-        )
-        wandb.log({
-            "actor/old_ref_approx_kl": old_ref_approx_kl.item()
-        }, step=step)
             
     async def train(self):
 
@@ -99,9 +72,7 @@ class PPOTrainer(Trainer):
                 tensor_dict = self.actor.compute_logps(tensor_dict, step)
 
             if dist.get_rank() == 0:
-                if self.config.actor.kl.coef > 0:
-                    self._compute_approx_kl(tensor_dict, step)
-                compute_advantages(self.config.adv, tensor_dict, cu_seqs, step)
+                compute_advantages(self.config, tensor_dict, cu_seqs, step)
 
             self.actor.ppo_update(tensor_dict, step)
             if self.config.adv.estimator == "gae":
