@@ -87,12 +87,17 @@ class FSDPWorker(Worker):
         num_training_steps = total_steps * getattr(
             self.config, "update_per_rollout", 1
         )
-        num_warmup_steps = int(self.config.scheduler.warmup_ratio * num_training_steps)
+        scheduler_config = OmegaConf.to_container(self.config.scheduler)
+        scheduler_name = scheduler_config.pop("name")
+        num_warmup_steps = int(
+            scheduler_config.pop("warmup_ratio") * num_training_steps
+        )
         self.scheduler = get_scheduler(
-            self.config.scheduler.name,
+            scheduler_name,
             self.optimizer,
             num_warmup_steps=num_warmup_steps,
-            num_training_steps=num_training_steps
+            num_training_steps=num_training_steps,
+            **scheduler_config
         )
 
     def _scatter_data(

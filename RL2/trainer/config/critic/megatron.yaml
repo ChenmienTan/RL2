@@ -20,8 +20,8 @@ optimizer:
   clip_grad: 1.0
 scheduler:
   init_lr: ${critic.optimizer.min_lr}
-  lr_decay_style: constant
-  warmup_ratio: 0.1
+  lr_decay_style: cosine
+  warmup_ratio: 0.03
   start_wd: ${critic.optimizer.weight_decay}
   end_wd: ${critic.optimizer.weight_decay}
   wd_incr_style: constant

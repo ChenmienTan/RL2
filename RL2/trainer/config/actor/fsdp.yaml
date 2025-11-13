@@ -11,6 +11,7 @@ optimizer:
   weight_decay: 1e-2
 max_grad_norm: 1.0
 scheduler:
-  name: constant
-  warmup_ratio: 0.1
+  name: cosine_with_min_lr
+  min_lr: 1e-7
+  warmup_ratio: 0.03
 offload_optimizer: true
