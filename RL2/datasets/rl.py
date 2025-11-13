@@ -67,7 +67,12 @@ class Experience:
 
         # `previous_action_text` is not empty if aborted before
         self.action_text = self.previous_action_text + payload["text"]
-        # COMMENT: token-in-token-out
+
+        # encode(decode(tokens)) may not be identical to tokens. Therefore, 
+        # token-in-token-out is necessary to guanartee that tokens fed into 
+        # training and inference engines are identical
+        # https://github.com/OpenRLHF/OpenRLHF/pull/1094
+        # https://github.com/THUDM/slime/pull/117
         meta_info = payload["meta_info"]
         if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3:
             logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))

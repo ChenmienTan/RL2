@@ -113,7 +113,7 @@ def compute_advantages(
             k: v[indices]
             for k, v in tensor_dict.items()
         }
-    # COMMENT: non-concat state transition
+    # When computing advantages, sequences within a trajectory are concatenated
     processed_tensor_dict = pack_tensor_dicts([
         _extract_actions(
             {

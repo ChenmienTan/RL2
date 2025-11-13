@@ -25,7 +25,7 @@ def initialize_global_process_group(timeout_second=36000):
 
 def broadcast_object(
     obj: Optional[Any],
-    src: Optional[int] = None,
+    src: int,
     group: Optional[dist.ProcessGroup] = None
 ) -> Any:
 
