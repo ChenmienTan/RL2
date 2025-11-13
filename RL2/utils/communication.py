@@ -23,17 +23,30 @@ def initialize_global_process_group(timeout_second=36000):
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
 
+def _unwrap_process_group(
+    process_group: dist.ProcessGroup
+) -> dist.ProcessGroup:
+
+    if hasattr(process_group, "group"):
+        return process_group.group
+    elif hasattr(process_group, "get_group"):
+        return process_group.get_group()
+    else:
+        return process_group
+
 def broadcast_object(
     obj: Optional[Any],
-    src: int,
-    group: Optional[dist.ProcessGroup] = None
+    src: Optional[int] = None,
+    process_group: Optional[dist.ProcessGroup] = None,
+    group_src: Optional[int] = None
 ) -> Any:
 
     object_list = [obj]
     dist.broadcast_object_list(
         object_list,
         src=src,
-        group=group
+        group=_unwrap_process_group(process_group),
+        group_src=group_src
     )
     return object_list[0]
 
@@ -49,7 +62,7 @@ def gather_and_concat_list(
     dist.gather_object(
         lst,
         lists,
-        group=process_group,
+        group=_unwrap_process_group(process_group),
         group_dst=0
     )
     return (

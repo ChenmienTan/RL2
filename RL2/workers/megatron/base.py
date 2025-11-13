@@ -128,7 +128,7 @@ class MegatronWorker(Worker):
     def _gather_data(
         self, minibatches: List[Dict[str, torch.Tensor]]
     ) -> Optional[Dict[str, torch.Tensor]]:
-        return gather_data(minibatches, mpu.get_data_parallel_group_gloo())
+        return gather_data(minibatches, mpu.get_data_parallel_group())
 
     def _offload_model_to_cpu(self):
 
@@ -249,12 +249,11 @@ class MegatronWorker(Worker):
             forward_only=not torch.is_grad_enabled(),
             collect_non_loss_data=not torch.is_grad_enabled()
         )
-        if mpu.get_pipeline_model_parallel_world_size() > 1:
-            output = broadcast_object(
-                output,
-                mpu.get_pipeline_model_parallel_last_rank(),
-                mpu.get_pipeline_model_parallel_group().group
-            )
+        output = broadcast_object(
+            output,
+            process_group=mpu.get_pipeline_model_parallel_group(),
+            group_src=mpu.get_pipeline_model_parallel_world_size() - 1
+        )
         if torch.is_grad_enabled():
             self._load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
