@@ -1,12 +1,9 @@
-from typing import Dict
 import hydra
 from omegaconf import DictConfig
 import asyncio
-import torch
 import torch.distributed as dist
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import trange
-import wandb
 from RL2.trainer import Trainer
 from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import (
