@@ -48,6 +48,8 @@ class MegatronWorker(Worker):
         self.provider.fp16 = config.dtype == "float16"
         self.provider.bf16 = config.dtype == "bfloat16"
         self.provider.attention_backend = "flash"
+        self.provider.variable_seq_lengths = True
+        self.provider.moe_token_dispatcher_type = "alltoall"
         tf_config = OmegaConf.to_container(config.tf_config)
         for k, v in tf_config.items():
             setattr(self.provider, k, v)
@@ -249,8 +251,8 @@ class MegatronWorker(Worker):
         )
         output = broadcast_object(
             output,
-            group=mpu.get_pipeline_model_parallel_group(),
-            group_src=mpu.get_pipeline_model_parallel_world_size() - 1
+            mpu.get_pipeline_model_parallel_last_rank(),
+            mpu.get_pipeline_model_parallel_group().group
         )
         if torch.is_grad_enabled():
             self._load_optimizer_to_device(torch.cuda.current_device())

@@ -121,8 +121,7 @@ def scatter_data(
             tensor_dict, multiple_of, max_length_per_dp, pair
         )
     minibatches = broadcast_object(
-        minibatches if dist.get_rank() == 0 else None,
-        src=0
+        minibatches if dist.get_rank() == 0 else None, 0
     )
     chunk_size = len(minibatches) // dp_size
     minibatches = minibatches[dp_rank * chunk_size:(dp_rank + 1) * chunk_size]

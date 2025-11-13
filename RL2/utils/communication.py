@@ -26,15 +26,14 @@ def initialize_global_process_group(timeout_second=36000):
 def broadcast_object(
     obj: Optional[Any],
     src: Optional[int] = None,
-    group: Optional[dist.ProcessGroup] = None,
-    group_src: Optional[int] = None
+    group: Optional[dist.ProcessGroup] = None
 ) -> Any:
+
     object_list = [obj]
     dist.broadcast_object_list(
         object_list,
         src=src,
-        group=group,
-        group_src=group_src
+        group=group
     )
     return object_list[0]
 
