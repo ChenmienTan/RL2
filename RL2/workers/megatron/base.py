@@ -249,11 +249,12 @@ class MegatronWorker(Worker):
             forward_only=not torch.is_grad_enabled(),
             collect_non_loss_data=not torch.is_grad_enabled()
         )
-        output = broadcast_object(
-            output,
-            mpu.get_pipeline_model_parallel_last_rank(),
-            mpu.get_pipeline_model_parallel_group().group
-        )
+        if mpu.get_pipeline_model_parallel_world_size() > 1:
+            output = broadcast_object(
+                output,
+                mpu.get_pipeline_model_parallel_last_rank(),
+                mpu.get_pipeline_model_parallel_group().group
+            )
         if torch.is_grad_enabled():
             self._load_optimizer_to_device(torch.cuda.current_device())
             _, grad_norm, _ = self.optimizer.step()
