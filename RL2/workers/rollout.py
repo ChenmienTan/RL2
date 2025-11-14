@@ -230,6 +230,7 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
+            experience_buffer = []
             if self.pendings:
                 # Flush pendings to avoid tasks in previous steps calling the
                 # inference engine. We wait for tasks to finish at the begining 
