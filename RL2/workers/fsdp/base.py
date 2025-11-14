@@ -97,7 +97,7 @@ class FSDPWorker(Worker):
             self.optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_training_steps,
-            **scheduler_config
+            scheduler_specific_kwargs=scheduler_config
         )
 
     def _scatter_data(
