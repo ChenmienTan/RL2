@@ -7,7 +7,7 @@ from RL2.utils.communication import async_request
 load_dotenv("envs/tools/.env")
 with open("envs/tools/descriptions.jsonl") as f:
     TOOLS = [json.loads(line) for line in f]
-TOOL_PARSER = "qwen25"
+TOOL_CALL_PARSER = "qwen25"
 
 async def step(state, action, extra_info):
 
@@ -24,7 +24,7 @@ async def step(state, action, extra_info):
         payload={
             "text": action,
             "tools": TOOLS,
-            "tool_parser": TOOL_PARSER
+            "tool_call_parser": TOOL_CALL_PARSER
         }
     )
 
