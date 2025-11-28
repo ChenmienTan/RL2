@@ -1,6 +1,8 @@
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Dict
 import os
 import socket
+import asyncio
+import aiohttp
 from datetime import timedelta
 import torch
 import torch.distributed as dist
@@ -70,3 +72,40 @@ def gather_and_concat_list(
         if dist.get_rank(process_group) == 0
         else None
     )
+
+async def async_request(
+    url: str,
+    method: str = "POST",
+    payload: Dict[str, Any] = {},
+    headers: None | Dict[str, Any] = None,
+    timeout: int = 300,
+    max_trials: int = 3,
+    retry_delay: int = 1
+) -> Dict[str, Any] | str | None:
+    
+    async with aiohttp.ClientSession() as session:
+        for trial in range(max_trials):
+            try:
+                kwargs = {
+                    "url": url,
+                    "headers": headers,
+                    "timeout": aiohttp.ClientTimeout(total=timeout)
+                }
+                if method == "POST":
+                    req_ctx = session.post(json=payload, **kwargs)
+                elif method == "GET":
+                    req_ctx = session.get(**kwargs)
+                else:
+                    raise NotImplementedError
+                
+                async with req_ctx as response:
+                    response.raise_for_status()
+                    content_type = response.headers.get("Content-Type", "")
+                    if 'application/json' in content_type:
+                        return await response.json(content_type=None)
+                    else:
+                        return await response.text()
+            except Exception:
+                if trial == max_trials - 1:
+                    raise
+                await asyncio.sleep(retry_delay)
