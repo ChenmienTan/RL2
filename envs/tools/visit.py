@@ -68,8 +68,7 @@ async def summarize(url, summarizer_url, goal, text):
                     "content": USER_PROMPT.format(text=text, goal=goal)
                 }
             ],
-            "temperature": 0.0,
-            "max_tokens": 1024
+            "temperature": 0.0
         },
     )
     
