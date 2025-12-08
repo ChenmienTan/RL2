@@ -387,7 +387,7 @@ class Rollout:
         dtype_to_named_tensors = defaultdict(list)
         bucket_size = 0
         for name, tensor in named_tensor_generator:
-
+            # TODO: make async
             tensor = tensor.to(
                 torch.cuda.current_device(), non_blocking=True
             )

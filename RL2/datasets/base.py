@@ -52,6 +52,7 @@ def pack_tensor_dicts(
     }
 
 
+# TODO: seperate RL dataset
 class BaseDataset(Dataset):
     
     def __init__(self, config: DictConfig, tokenizer: AutoTokenizer):
