@@ -1,7 +1,7 @@
 import logging
 from math_verify import parse, verify
 from functools import partial
-from .base import base_generate
+from RL2.datasets import base_generate
 
 logging.getLogger("math_verify.parser").disabled = True
 logging.getLogger("math_verify.grader").disabled = True

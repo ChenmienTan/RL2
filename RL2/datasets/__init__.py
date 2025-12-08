@@ -11,5 +11,6 @@ from .rl import (
     Sample,
     SampleGroup,
     RLDataset,
-    StatefulCycleDataLoader
+    StatefulCycleDataLoader,
+    base_generate
 )
