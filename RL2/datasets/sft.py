@@ -7,16 +7,16 @@ class SFTDataset(BaseDataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
 
-        ex = self.dataset[idx]
+        sample = self.dataset[idx]
         if self.config.apply_chat_template:
             tensor_dicts = self._tokenize_messages(
-                ex[self.config.messages_key]
+                sample[self.config.messages_key]
             )
         else:
             tensor_dicts = [
                 self._tokenize_prompt_response(
-                    ex[self.config.prompt_key],
-                    ex[self.config.response_key]
+                    sample[self.config.prompt_key],
+                    sample[self.config.response_key]
                 )
             ]
         return tensor_dicts

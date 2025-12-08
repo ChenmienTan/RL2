@@ -246,20 +246,20 @@ class RLDataset(BaseDataset):
 
     def __getitem__(self, idx: int) -> Dict[str, Union[str, Dict[str, Any]]]:
 
-        ex = self.dataset[idx]
+        sample = self.dataset[idx]
 
         if not self.config.path:
             state_text = None
         elif self.config.apply_chat_template:
             state_text = self.tokenizer.apply_chat_template(
-                ex[self.config.messages_key],
+                sample[self.config.messages_key],
                 add_generation_prompt=True,
                 tokenize=False
             )
         else:
-            state_text = ex[self.config.prompt_key]
+            state_text = sample[self.config.prompt_key]
 
-        extra_info = ex.get("extra_info", {})
+        extra_info = sample.get("extra_info", {})
         return ExperienceGroup(
             self.config,
             self.tokenizer,
