@@ -22,13 +22,13 @@ done
 torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
-    train_data.path=train@Chenmien/SearchR1 \
-    train_data.prompts_per_rollout=256 \
-    train_data.responses_per_prompt=5 \
-    train_data.max_turns=2 \
-    train_data.sampling_params.max_new_tokens=512 \
-    "train_data.sampling_params.stop=['</search>','</answer>']" \
-    test_data.path=test@Chenmien/SearchR1 \
+    rollout.train.path=train@Chenmien/SearchR1 \
+    rollout.train.prompts_per_rollout=256 \
+    rollout.train.responses_per_prompt=5 \
+    rollout.train.max_turns=2 \
+    rollout.train.sampling_params.max_new_tokens=512 \
+    "rollout.train.sampling_params.stop=['</search>','</answer>']" \
+    rollout.train.path=test@Chenmien/SearchR1 \
     actor.model_name=Qwen/Qwen2.5-3B \
     actor.max_length_per_device=8192 \
     rollout.env_path=envs/searchr1.py \
