@@ -10,7 +10,7 @@ import multiprocessing
 from collections import defaultdict
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor import DTensor
+from torch.distributed.tensor import DTensor, Replicate
 from transformers import AutoTokenizer
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.entrypoints.http_server_engine import launch_server_process
@@ -387,12 +387,6 @@ class Rollout:
         dtype_to_named_tensors = defaultdict(list)
         bucket_size = 0
         for name, tensor in named_tensor_generator:
-            # TODO: make async
-            tensor = tensor.to(
-                torch.cuda.current_device(), non_blocking=True
-            )
-            if isinstance(tensor, DTensor):
-                tensor = tensor.full_tensor()
             param_size = tensor.numel() * tensor.element_size()
 
             if bucket_size > 0 and bucket_size + param_size > (self.config.bucket_size << 20):
@@ -400,6 +394,15 @@ class Rollout:
                 _update_tensor_bucket(dtype_to_named_tensors)
                 dtype_to_named_tensors = defaultdict(list)
                 bucket_size = 0
+
+            tensor = tensor.to(
+                torch.cuda.current_device(), non_blocking=True
+            )
+            if isinstance(tensor, DTensor):
+                tensor = tensor.redistribute(
+                    placements=[Replicate()] * tensor.device_mesh.ndim,
+                    async_op=True
+                ).to_local()
             
             dtype_to_named_tensors[tensor.dtype].append((name, tensor))
             bucket_size += param_size
