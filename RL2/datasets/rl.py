@@ -128,17 +128,28 @@ async def base_generate(
     sample: Sample,
     env_step_fn: Callable
 ):
+    """
+    A typical generate function where user only needs to provide the `env_step` 
+    function. User may provide their own `generate` function for advanced use.
+    """
     sampling_params = OmegaConf.to_container(config.sampling_params)
 
     match sample.status:
 
         case Sample.Status.RUNNING:
 
-            sample.state_text = tokenizer.apply_chat_template(
-                sample.sample["messages"],
-                add_generation_prompt=True,
-                tokenize=False
-            )
+            # For Gym-like environments, `reset` function should be called to 
+            # obtain the initial state
+            if config.apply_chat_template:
+                # User may provide tools if needed
+                sample.state_text = tokenizer.apply_chat_template(
+                    sample.sample[config.messages_key],
+                    add_generation_prompt=True,
+                    tokenize=False
+                )
+            else:
+                sample.state_text = sample.sample[config.prompt_key]
+
             sample.state_dict = _initialize_state_dict(
                 tokenizer, sample.state_text
             )
@@ -166,13 +177,7 @@ async def base_generate(
         if sample.status == Sample.Status.ABORTED:
             return
         
-        response = await env_step_fn(
-            sample.state_text,
-            sample.action_text,
-            sample.sample["answer"]
-        )
-        if sample.turn == config.max_turns:
-            response["done"] = True
+        response = await env_step_fn(config, sample)
         _add_env_response(tokenizer, sample, response)
         if sample.status == Sample.Status.DONE:
             return

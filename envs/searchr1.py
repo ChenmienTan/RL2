@@ -1,9 +1,10 @@
-from typing import List, Dict, Any
+from typing import Dict, Any
+from omegaconf import DictConfig
 import re
 import string
 import aiohttp
 from functools import partial
-from RL2.datasets import base_generate
+from RL2.datasets import Sample, base_generate
 
 def normalize_answer(s):
 
@@ -22,18 +23,14 @@ def normalize_answer(s):
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
-async def env_step(
-    state: str,
-    action: str,
-    answer: str | List[str]
-) -> Dict[str, Any]:
+async def env_step(config: DictConfig, sample: Sample) -> Dict[str, Any]:
 
     match = re.search(
-        r"<(search|answer)>(.*?)</\1>", action, re.DOTALL
+        r"<(search|answer)>(.*?)</\1>", sample.action_text, re.DOTALL
     )
     env_response = {"next_state": None, "done": False, "reward": 0.0}
     if match is None:
-        env_response["next_state"] = state + action + "\nMy previous action is invalid. \
+        env_response["next_state"] = sample.state_text + sample.action_text + "\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
 If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n"
     elif match.group(1) == "search":
@@ -45,13 +42,14 @@ If I want to give the final answer, I should put the answer between <answer> and
             ) as response:
                 try:
                     passage = (await response.json())["passage"].strip()
-                    env_response["next_state"] = state + action + f"\n\n<information>{passage}</information>\n\n"
+                    env_response["next_state"] = sample.state_text + sample.action_text + f"\n\n<information>{passage}</information>\n\n"
                 except:
-                    env_response["next_state"] = state + action + "\nThe query exceeded the maximum length allowed. Let me try again.\n"
+                    env_response["next_state"] = sample.state_text + sample.action_text + "\nThe query exceeded the maximum length allowed. Let me try again.\n"
     else:
         env_response["done"] = True
         pred = normalize_answer(match.group(2).strip())
 
+        answer = sample.sample["answer"]
         if isinstance(answer, str):
             answer = [answer]
         answer = [normalize_answer(a) for a in answer]
