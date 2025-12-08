@@ -46,7 +46,6 @@ rollout:
     apply_chat_template: true
     dynamic_filtering: true
     partial_rollout: false
-    mask_offpolicy_data: true
   test:
     path: null
     prompts_per_rollout: null

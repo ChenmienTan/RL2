@@ -8,7 +8,8 @@ from .sft import SFTDataset
 from .rm import RMDataset
 from .dpo import DPODataset
 from .rl import (
-    ExperienceGroup,
+    Sample,
+    SampleGroup,
     RLDataset,
     StatefulCycleDataLoader
 )

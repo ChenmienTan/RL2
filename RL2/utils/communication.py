@@ -1,6 +1,7 @@
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Literal
 import os
 import socket
+import aiohttp
 from datetime import timedelta
 import torch
 import torch.distributed as dist
@@ -70,3 +71,20 @@ def gather_and_concat_list(
         if dist.get_rank(process_group) == 0
         else None
     )
+
+async def async_request(
+    url: str,
+    method: Literal["POST", "GET"] = "POST",
+    **kwargs
+):
+
+    async with aiohttp.ClientSession() as session:
+        match method:
+            case "POST":
+                req_ctx = session.post(url, **kwargs)
+            case "GET":
+                req_ctx = session.get(url, **kwargs)
+
+        async with req_ctx as response:
+            # TODO: maybe not JSON
+            return await response.json(content_type=None)

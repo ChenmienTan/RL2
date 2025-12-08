@@ -3,7 +3,6 @@ from omegaconf import OmegaConf, DictConfig
 import os
 import time
 import asyncio
-import aiohttp
 import requests
 import importlib
 import multiprocessing
@@ -20,7 +19,7 @@ from RL2.datasets import (
     pack_tensor_dicts,
     RLDataset,
     StatefulCycleDataLoader,
-    ExperienceGroup
+    SampleGroup
 )
 from RL2.utils.communication import get_host, get_available_port
 from RL2.utils.logging import (
@@ -71,7 +70,7 @@ class Rollout:
             self.test_dataloader = self._prepare_dataloader(False)
 
             self._prepare_environment()
-            self.experience_buffer: List[ExperienceGroup] = []
+            self.sample_buffer: List[SampleGroup] = []
 
     def _prepare_device_mesh(self):
 
@@ -130,7 +129,7 @@ class Rollout:
             port=get_available_port(),
             log_level="error"
         )
-        self.router_url = f"http://{router_args.host}:{router_args.port}"
+        self.config.train.router_url = self.config.test.router_url = f"http://{router_args.host}:{router_args.port}"
         process = multiprocessing.Process(
             target=launch_router, args=(router_args,)
         )
@@ -198,43 +197,15 @@ class Rollout:
         step: int
     ) -> Optional[Tuple[Optional[Dict[str, torch.Tensor]], Optional[torch.Tensor]]]:
 
-        async def _async_generate(
-            states: List[int],
-            sampling_params: Dict[str, Any],
-            max_trials: int = 3,
-            retry_delay: int = 1
-        ) -> Dict[str, Any]:
-            
-            payload = {
-                "input_ids": states,
-                "sampling_params": sampling_params,
-                "return_logprob": True
-            }
-
-            async with aiohttp.ClientSession() as session:
-                for trial in range(max_trials):
-                    try:
-                        async with session.post(
-                            f"{self.router_url}/generate",
-                            json=payload
-                        ) as response:
-                            return await response.json(content_type=None)
-                    except Exception:
-                        if trial == max_trials - 1:
-                            raise
-                        await asyncio.sleep(retry_delay)
-
-        def _schedule_experience_tasks(
-            experience_groups: Sequence[ExperienceGroup]
+        def _schedule_tasks(
+            sample_groups: Sequence[SampleGroup]
         ):
 
-            for experience_group in experience_groups:
+            for sample_group in sample_groups:
                 pendings.add(
                     asyncio.create_task(
-                        experience_group.make(
-                            _async_generate,
-                            self.env.step,
-                            getattr(self.env, "reset", None)
+                        sample_group.make(
+                            self.env.generate
                         )
                     )
                 )
@@ -255,15 +226,15 @@ class Rollout:
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
             if train and config.partial_rollout:
-                _schedule_experience_tasks(self.experience_buffer)
+                _schedule_tasks(self.sample_buffer)
 
             while completed_groups < groups_to_complete:
 
                 if first_iter or (train and config.partial_rollout):
-                    experience_groups = dataloader(
+                    sample_groups = dataloader(
                         groups_to_complete - len(pendings)
                     )
-                    _schedule_experience_tasks(experience_groups)
+                    _schedule_tasks(sample_groups)
                 first_iter = False
 
                 done, pendings = await asyncio.wait(
@@ -274,9 +245,9 @@ class Rollout:
                     if completed_groups < groups_to_complete:
                         tbar.update()
                     completed_groups += 1
-                    experience_group = task.result()
+                    sample_group = task.result()
                     all_tensor_dicts_delta, metrics_delta = (
-                        experience_group.to_all_tensor_dicts_and_metrics()
+                        sample_group.to_all_tensor_dicts_and_metrics()
                     )
                     for k, v in metrics_delta.items():
                         metrics[k].extend(v)
@@ -293,7 +264,7 @@ class Rollout:
             if train and config.partial_rollout:
                 self._make_request("pause_generation", self.worker_urls)
                 done, _ = await asyncio.wait(pendings)
-                self.experience_buffer = [task.result() for task in done]
+                self.sample_buffer = [task.result() for task in done]
                 self._make_request("continue_generation", self.worker_urls)
 
             metrics["dynamic_filtering_ratio"].append(

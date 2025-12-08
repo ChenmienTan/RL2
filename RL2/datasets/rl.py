@@ -1,15 +1,47 @@
-from typing import Optional, Dict, Any, List, Union, Callable, Tuple
-from omegaconf import OmegaConf, DictConfig
+from typing import Dict, Any, List, Callable, Tuple
+from omegaconf import DictConfig
+from enum import Enum
+from dataclasses import dataclass, field
 import asyncio
 from copy import deepcopy
 from collections import defaultdict
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
-from RL2.datasets import BaseDataset, get_tensor_dict
+from RL2.datasets import get_tensor_dict, BaseDataset
 
 
-class Experience:
+@dataclass
+class Sample:
+
+    class Status(Enum):
+
+        RUNNING = "running"
+        ABORTED = "aborted"
+        DONE = "done"
+
+    # for initialization
+    sample: Dict[str, Any] = field(default_factory=dict)
+
+    # for environment interaction
+    state_text: str = ""
+    action_text: str = ""
+
+    # for training
+    state_dict: Dict[str, List[int | float]] = field(default_factory=dict)
+    state_dicts: List[Dict[str, List[int | float]]] = field(default_factory=list)
+
+    # for logging
+    turn: int = 0
+    metrics: Dict[str, List[float | int | bool]] = field(default_factory=defaultdict(list))
+
+    # for partial rollout
+    status: Status = Status.RUNNING
+    previous_action_text: str = ""
+    previous_response_length: int = 0
+
+
+class SampleGroup:
 
     def __init__(
         self,
@@ -20,236 +52,48 @@ class Experience:
 
         self.config = config
         self.tokenizer = tokenizer
-        self.sample = sample
-
-        self._initialize()
-        self.sampling_params = OmegaConf.to_container(
-            config.sampling_params
-        )
-
-        self.previous_action_text = ""
-        self.previous_response_length = 0
-
-    def _initialize(self):
-        
-        self.state_text = None
-
-        self.turn = 0
-        self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
-        self.rewards, self.scores = [], []
-        self.metrics = defaultdict(list)
-
-        self.done = False
-
-    def _initialize_state_dict(
-        self, state_text: str
-    ) -> Dict[str, List[Union[int, float]]]:
-        
-        state = self.tokenizer.encode(state_text, add_special_tokens=False)
-        return {
-            "states": state,
-            "actions": len(state) * [0],
-            "action_mask": len(state) * [0],
-            "logps": len(state) * [0.0],
-            "rewards": len(state) * [0.0]
-        }
-
-    def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
-
-        # `previous_action_text` is not empty if aborted before
-        self.action_text = self.previous_action_text + payload["text"]
-
-        # encode(decode(tokens)) may not be identical to tokens. Therefore, 
-        # token-in-token-out is necessary to guanartee that tokens fed into 
-        # training and inference engines are identical
-        # https://github.com/OpenRLHF/OpenRLHF/pull/1094
-        # https://github.com/THUDM/slime/pull/117
-        meta_info = payload["meta_info"]
-        if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3:
-            logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
-            self.state_dict["states"].extend(action)
-            self.state_dict["actions"].extend(action)
-            self.state_dict["action_mask"].extend(len(action) * [1])
-            self.state_dict["logps"].extend(logp)
-
-        finish_reason = meta_info["finish_reason"]["type"]
-        if finish_reason == "abort":
-            if self.config.mask_offpolicy_data:
-                # mask previous actions to guarantee fully onpolicy training
-                length = len(self.state_dict["states"])
-                self.state_dict["actions"] = length * [0]
-                self.state_dict["action_mask"] = length * [0]
-                self.state_dict["logps"] = length * [0.0]
-                self.state_dicts = self.state_dicts[-1:]
-            self.previous_action_text = self.action_text
-            self.previous_response_length += meta_info["completion_tokens"]
-            return True
-        
-        self.turn += 1
-        self.metrics["response_length"].append(
-            self.previous_response_length + meta_info["completion_tokens"]
-        )
-        self.metrics["length_clip_ratio"].append(finish_reason == "length")
-
-        # reset if not aborted
-        self.previous_action_text = ""
-        self.previous_response_length = 0
-        return False
-
-    def _add_env_response(self, payload: Dict[str, Any]) -> bool:
-        
-        self.extra_info = payload["extra_info"]
-        self.state_dict["rewards"].extend(
-            (
-                len(self.state_dict["states"]) - len(self.state_dict["rewards"]) - 1
-            ) * [0] + [payload["reward"]]
-        )
-        self.rewards.append(payload["reward"])
-        self.scores.append(payload["score"])
-
-        if self.turn == self.config.max_turns or payload["done"]:
-            self.state_dicts.append(self.state_dict)
-            self.metrics["n_turns"].append(self.turn)
-            self.metrics["rewards"].append(sum(self.rewards))
-            self.metrics["scores"].append(sum(self.scores))
-            return True
-        if payload["next_state"].startswith(self.state_text + self.action_text):
-            state_dict_delta = self._initialize_state_dict(
-                payload["next_state"][len(self.state_text + self.action_text):]
-            )
-            for k, v in state_dict_delta.items():
-                self.state_dict[k].extend(v)
-        else:
-            self.state_dicts.append(self.state_dict)
-            self.state_dict = self._initialize_state_dict(payload["next_state"])
-        self.state_text = payload["next_state"]
-        return False
-
-    # TODO: make this more flexible
-    async def make(
-        self,
-        async_generate_func: Callable,
-        env_step_func: Callable,
-        env_reset_func: Optional[Callable]
-    ):
-        
-        if self.done:
-            if not self.config.mask_offpolicy_data:
-                return
-            self._initialize()
-
-        if self.state_text is None:
-            if self.config.path:
-                if self.config.apply_chat_template:
-                    self.state_text = self.tokenizer.apply_chat_template(
-                        self.sample[self.config.messages_key],
-                        add_generation_prompt=True,
-                        tokenize=False
-                    )
-                else:
-                    self.state_text = self.sample[self.config.prompt_key]
-                self.extra_info = deepcopy(self.sample.get("extra_info", {}))
-            else:
-                self.state_text, self.extra_info = await env_reset_func()
-            self.state_dict = self._initialize_state_dict(self.state_text)
-
-        while True:
-
-            abort = self._add_llm_response(
-                await async_generate_func(
-                    self.state_dict["states"],
-                    {
-                        **self.sampling_params,
-                        "max_new_tokens": self.sampling_params["max_new_tokens"] - self.previous_response_length
-                    }
-                )
-            )
-            if abort:
-                return
-            self.done = self._add_env_response(
-                await env_step_func(
-                    self.state_text,
-                    self.action_text,
-                    self.extra_info
-                )
-            )
-            if self.done:
-                return
-
-    def to_tensor_dicts_and_metrics(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
-
-        tensor_dicts = []
-        for state_dict in self.state_dicts:
-            tensor_dict = get_tensor_dict(
-                state_dict["states"],
-                state_dict["actions"],
-                state_dict["action_mask"]
-            )
-            tensor_dict["llm_logps"] = torch.FloatTensor(
-                state_dict["logps"][1:]
-            )
-            tensor_dict["rewards"] = torch.FloatTensor(
-                state_dict["rewards"][1:]
-            )
-            tensor_dicts.append(tensor_dict)
-        return tensor_dicts, self.metrics
-
-
-class ExperienceGroup:
-
-    def __init__(
-        self,
-        config: DictConfig,
-        tokenizer: AutoTokenizer,
-        sample: Dict[str, Any]
-    ):
-
-        self.experiences = [
-            Experience(
-                config,
-                tokenizer,
-                sample
-            )
+        self.samples = [
+            Sample(sample=deepcopy(sample))
             for _ in range(config.responses_per_prompt)
         ]
 
-    async def make(
-        self,
-        async_generate_func: Callable,
-        env_step_func: Callable,
-        env_reset_func: Optional[Callable]
-    ) -> "ExperienceGroup":
+    async def generate(self, generate_fn: Callable) -> "SampleGroup":
         await asyncio.gather(*(
-            experience.make(
-                async_generate_func,
-                env_step_func,
-                env_reset_func
-            )
-            for experience in self.experiences
+            generate_fn(self.config, self.tokenizer, sample)
+            for sample in self.samples
         ))
         return self
     
-    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[Union[float, int, bool]]]]:
+    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
         all_tensor_dicts, metrics = [], defaultdict(list)
-        for experience in self.experiences:
-            tensor_dicts, metrics_delta = experience.to_tensor_dicts_and_metrics()
+        for sample in self.samples:
+            tensor_dicts = []
+            for state_dict in sample.state_dicts:
+                tensor_dict = get_tensor_dict(
+                    state_dict["states"],
+                    state_dict["actions"],
+                    state_dict["action_mask"],
+                )
+                tensor_dict["llm_logps"] = torch.FloatTensor(
+                    tensor_dict["logps"][1:]
+                )
+                tensor_dict["rewards"] = torch.FloatTensor(
+                    tensor_dict["rewards"][1:]
+                )
+                tensor_dicts.append(tensor_dict)
             all_tensor_dicts.append(tensor_dicts)
-            for k, v in metrics_delta.items():
+            for k, v in sample.metrics.items():
                 metrics[k].extend(v)
         return all_tensor_dicts, metrics
 
 
 class RLDataset(BaseDataset):
 
-    def __getitem__(self, idx: int) -> ExperienceGroup:
+    def __getitem__(self, idx: int) -> SampleGroup:
 
         sample = self.dataset[idx]
-        return ExperienceGroup(
-            self.config,
-            self.tokenizer,
-            sample
-        )
+        return SampleGroup(self.config, self.tokenizer, sample)
 
 
 class StatefulCycleDataLoader(StatefulDataLoader):
