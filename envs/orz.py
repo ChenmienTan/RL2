@@ -1,10 +1,12 @@
 import logging
 from math_verify import parse, verify
+from functools import partial
+from .base import base_generate
 
 logging.getLogger("math_verify.parser").disabled = True
 logging.getLogger("math_verify.grader").disabled = True
 
-async def step(state, action, answer):
+async def env_step(state, action, answer):
 
     reward = float(
         verify(
@@ -17,3 +19,5 @@ async def step(state, action, answer):
         "done": True,
         "reward": reward
     }
+
+generate = partial(base_generate, env_step_fn=env_step)
