@@ -1,8 +1,10 @@
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Callable
+from omegaconf import OmegaConf, DictConfig
 from transformers import AutoTokenizer
 from RL2.datasets import Sample
+from RL2.utils.communication import async_request
 
-def initialize_state_dict(
+def _initialize_state_dict(
     tokenizer: AutoTokenizer,
     state_text: str
 ) -> Dict[str, List[int | float]]:
@@ -16,7 +18,7 @@ def initialize_state_dict(
         "rewards": len(state) * [0.0]
     }
 
-def add_llm_response(sample: Sample, response: Dict[str, Any]):
+def _add_llm_response(sample: Sample, response: Dict[str, Any]):
 
     # `previous_action_text` is non-empty if aborted before
     sample.action_text = sample.previous_action_text + response["text"]
@@ -53,7 +55,7 @@ def add_llm_response(sample: Sample, response: Dict[str, Any]):
     sample.previous_action_text = ""
     sample.previous_response_length = 0
 
-def add_env_response(
+def _add_env_response(
     tokenizer: AutoTokenizer,
     sample: Sample,
     response: Dict[str, Any]
@@ -69,7 +71,7 @@ def add_env_response(
         return
 
     if response["next_state"].startswith(sample.state_text + sample.action_text):
-        state_dict_delta = initialize_state_dict(
+        state_dict_delta = _initialize_state_dict(
             tokenizer,
             response["next_state"][len(sample.state_text + sample.action_text):]
         )
@@ -77,7 +79,62 @@ def add_env_response(
             sample.state_dict[k].extend(v)
     else:
         sample.state_dicts.append(sample.state_dict)
-        sample.state_dict = initialize_state_dict(
+        sample.state_dict = _initialize_state_dict(
             tokenizer, response["next_state"]
         )
     sample.state_text = response["next_state"]
+
+async def base_generate(
+    config: DictConfig,
+    tokenizer: AutoTokenizer,
+    sample: Sample,
+    env_step_fn: Callable
+):
+    sampling_params = OmegaConf.to_container(config.sampling_params)
+
+    match sample.status:
+
+        case Sample.Status.RUNNING:
+
+            sample.state_text = tokenizer.apply_chat_template(
+                sample.sample["messages"],
+                add_generation_prompt=True,
+                tokenize=False
+            )
+            sample.state_dict = _initialize_state_dict(
+                tokenizer, sample.state_text
+            )
+
+        case Sample.Status.ABORTED:
+            sample.status = Sample.Status.RUNNING
+
+        case Sample.Status.DONE:
+            return
+
+    while True:
+        
+        response = await async_request(
+            f"{config.router_url}/generate",
+            json={
+                "input_ids": sample.state_dict["states"],
+                "sampling_params": {
+                    **sampling_params,
+                    "max_new_tokens": sampling_params["max_new_tokens"] - sample.previous_response_length
+                },
+                "return_logprob": True
+            }
+        )
+        _add_llm_response(sample, response)
+        if sample.status == Sample.Status.ABORTED:
+            return
+        
+        response = await env_step_fn(
+            sample.state_text,
+            sample.action_text,
+            sample.sample["answer"]
+        )
+        if sample.turn == config.max_turns:
+            response["done"] = True
+        _add_env_response(tokenizer, sample, response)
+        if sample.status == Sample.Status.DONE:
+            return

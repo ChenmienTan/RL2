@@ -1,17 +1,9 @@
 from typing import List, Dict, Any
-from omegaconf import OmegaConf, DictConfig
 import re
 import string
 import aiohttp
-from transformers import AutoTokenizer
-from RL2.datasets import Sample
-from RL2.utils.communication import async_request
-from .base import (
-    initialize_state_dict,
-    add_llm_response,
-    add_env_response
-)
-
+from functools import partial
+from .base import base_generate
 
 def normalize_answer(s):
 
@@ -70,57 +62,4 @@ If I want to give the final answer, I should put the answer between <answer> and
 
     return env_response
 
-
-async def generate(
-    config: DictConfig,
-    tokenizer: AutoTokenizer,
-    sample: Sample
-):
-    sampling_params = OmegaConf.to_container(config.sampling_params)
-
-    match sample.status:
-
-        case Sample.Status.RUNNING:
-
-            sample.state_text = tokenizer.apply_chat_template(
-                sample.sample["messages"],
-                add_generation_prompt=True,
-                tokenize=False
-            )
-            sample.state_dict = initialize_state_dict(
-                tokenizer, sample.state_text
-            )
-
-        case Sample.Status.ABORTED:
-            sample.status = Sample.Status.RUNNING
-
-        case Sample.Status.DONE:
-            return
-
-    while True:
-        
-        response = await async_request(
-            f"{config.router_url}/generate",
-            json={
-                "input_ids": sample.state_dict["states"],
-                "sampling_params": {
-                    **sampling_params,
-                    "max_new_tokens": sampling_params["max_new_tokens"] - sample.previous_response_length
-                },
-                "return_logprob": True
-            }
-        )
-        add_llm_response(sample, response)
-        if sample.status == Sample.Status.ABORTED:
-            return
-        
-        response = await env_step(
-            sample.state_text,
-            sample.action_text,
-            sample.sample["answer"]
-        )
-        if sample.turn == config.max_turns:
-            response["done"] = True
-        add_env_response(tokenizer, sample, response)
-        if sample.status == Sample.Status.DONE:
-            return
+generate = partial(base_generate, env_step_fn=env_step)
