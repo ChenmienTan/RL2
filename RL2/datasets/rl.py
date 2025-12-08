@@ -213,10 +213,10 @@ class SampleGroup:
                     state_dict["action_mask"],
                 )
                 tensor_dict["llm_logps"] = torch.FloatTensor(
-                    tensor_dict["logps"][1:]
+                    state_dict["logps"][1:]
                 )
                 tensor_dict["rewards"] = torch.FloatTensor(
-                    tensor_dict["rewards"][1:]
+                    state_dict["rewards"][1:]
                 )
                 tensor_dicts.append(tensor_dict)
             all_tensor_dicts.append(tensor_dicts)
