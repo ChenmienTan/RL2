@@ -33,7 +33,7 @@ class Sample:
 
     # for logging
     turn: int = 0
-    metrics: Dict[str, List[float | int | bool]] = field(default_factory=defaultdict(list))
+    metrics: Dict[str, List[float | int | bool]] = field(default_factory=lambda: defaultdict(list))
 
     # for partial rollout
     status: Status = Status.RUNNING
