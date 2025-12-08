@@ -36,8 +36,6 @@ rollout:
     prompts_per_rollout: null
     responses_per_prompt: 1
     max_turns: 3
-    partial_rollout: false
-    mask_offpolicy_data: true
     sampling_params:
       temperature: 1.0
       max_new_tokens: null
@@ -46,7 +44,10 @@ rollout:
     prompt_key: prompt
     messages_key: messages
     apply_chat_template: true
-  test_data:
+    dynamic_filtering: true
+    partial_rollout: false
+    mask_offpolicy_data: true
+  test:
     path: null
     prompts_per_rollout: null
     responses_per_prompt: 1
@@ -60,7 +61,6 @@ rollout:
     messages_key: ${rollout.train.messages_key}
     apply_chat_template: ${rollout.train.apply_chat_template}
   env_path: null
-  dynamic_filtering: true
   bucket_size: 512
 
 ref_actor:
