@@ -76,6 +76,11 @@ class Rollout:
         tp_size = self.config.server_args.tp_size
         assert world_size % tp_size == 0, \
             f"World_size {world_size} must be divisible by tp_size {tp_size}."
+
+        self.process_group = dist.new_group(
+            ranks=list(range(world_size)),
+            backend="gloo"
+        )
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cpu",
             mesh_dim_names=("dp", "tp"),
@@ -298,7 +303,7 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
-        dist.barrier()
+        dist.barrier(group=self.process_group)
 
         if not train:
             return
