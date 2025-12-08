@@ -204,7 +204,7 @@ class Rollout:
             for sample_group in sample_groups:
                 pendings.add(
                     asyncio.create_task(
-                        sample_group.make(
+                        sample_group.generate(
                             self.env.generate
                         )
                     )
