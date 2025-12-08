@@ -1,4 +1,4 @@
-from typing import Set, Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
+from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -18,6 +18,7 @@ from sglang.srt.utils import MultiprocessingSerializer
 from sglang_router.launch_router import RouterArgs, launch_router
 from RL2.datasets import (
     pack_tensor_dicts,
+    RLDataset,
     StatefulCycleDataLoader,
     ExperienceGroup
 )
@@ -62,13 +63,15 @@ class Rollout:
         
         if dist.get_rank() == 0:
 
-            self._prepare_environment()
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
             self._launch_router_process()
+            self.train_dataloader = self._prepare_dataloader(True)
+            self.test_dataloader = self._prepare_dataloader(False)
 
-            self.pendings: Set[asyncio.Task] = set()
+            self._prepare_environment()
+            self.experience_buffer: List[ExperienceGroup] = []
 
     def _prepare_device_mesh(self):
 
@@ -106,14 +109,6 @@ class Rollout:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
         monkey_patch_torch_reductions()
 
-    def _prepare_environment(self):
-
-        spec = importlib.util.spec_from_file_location(
-            "custom_module", self.config.env_path
-        )
-        self.env = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.env)
-
     def _launch_server_process(self):
 
         server_args = OmegaConf.to_container(self.config.server_args)
@@ -143,142 +138,142 @@ class Rollout:
         time.sleep(3)
         assert process.is_alive()
 
+    def _prepare_dataloader(self, train: bool):
+        
+        dataset = RLDataset(
+            self.config.train if train else self.config.test,
+            self.tokenizer
+        )
+        return StatefulCycleDataLoader(
+            dataset=dataset,
+            batch_size=1,
+            shuffle=True,
+            collate_fn=lambda batch: batch[0]
+        )
+
+    def _prepare_environment(self):
+
+        spec = importlib.util.spec_from_file_location(
+            "custom_module", self.config.env_path
+        )
+        self.env = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.env)
+
     def _make_request(
         self,
         endpoint: str,
         url: Optional[Union[str, List[str]]] = None,
-        method: str = "POST",
         payload: Dict[str, Any] = {},
         max_trials: int = 3,
         retry_delay: int = 1
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ):
 
         if self.device_mesh["tp"].get_local_rank() != 0:
             return
         
         if isinstance(url, list):
-            return [
+            for u in url:
                 self._make_request(
-                    endpoint, u, method, payload, max_trials, retry_delay
+                    endpoint, u, payload, max_trials, retry_delay
                 )
-                for u in url
-            ]
+            return
                 
         for trial in range(max_trials):
             try:
-                if method == "POST":
-                    response = requests.post(
-                        f"{url or self.worker_url}/{endpoint}",
-                        json=payload
-                    )
-                elif method == "GET":
-                    response = requests.get(
-                        f"{url or self.worker_url}/{endpoint}"
-                    )
+                response = requests.post(
+                    f"{url or self.worker_url}/{endpoint}",
+                    json=payload
+                )
                 response.raise_for_status()
-                return response
+                return
             except Exception:
                 if trial == max_trials - 1:
                     raise
                 time.sleep(retry_delay)
 
-    async def _async_generate(
-        self,
-        states: List[int],
-        sampling_params: Dict[str, Any],
-        max_trials: int = 3,
-        retry_delay: int = 1
-    ) -> Dict[str, Any]:
-        
-        payload = {
-            "input_ids": states,
-            "sampling_params": sampling_params,
-            "return_logprob": True
-        }
-
-        async with aiohttp.ClientSession() as session:
-            for trial in range(max_trials):
-                try:
-                    async with session.post(
-                        f"{self.router_url}/generate",
-                        json=payload
-                    ) as response:
-                        return await response.json(content_type=None)
-                except Exception:
-                    if trial == max_trials - 1:
-                        raise
-                    await asyncio.sleep(retry_delay)
-
-    def _schedule_experience_tasks(
-        self,
-        experience_groups: Sequence[ExperienceGroup]
-    ):
-
-        for experience_group in experience_groups:
-            self.pendings.add(
-                asyncio.create_task(
-                    experience_group.make(
-                        self._async_generate,
-                        self.env.step,
-                        getattr(self.env, "reset", None)
-                    )
-                )
-            )
-
     @time_logger("rollout")
     async def __call__(
         self,
-        dataloader: StatefulCycleDataLoader,
         train: bool,
         step: int
     ) -> Optional[Tuple[Optional[Dict[str, torch.Tensor]], Optional[torch.Tensor]]]:
 
+        async def _async_generate(
+            states: List[int],
+            sampling_params: Dict[str, Any],
+            max_trials: int = 3,
+            retry_delay: int = 1
+        ) -> Dict[str, Any]:
+            
+            payload = {
+                "input_ids": states,
+                "sampling_params": sampling_params,
+                "return_logprob": True
+            }
+
+            async with aiohttp.ClientSession() as session:
+                for trial in range(max_trials):
+                    try:
+                        async with session.post(
+                            f"{self.router_url}/generate",
+                            json=payload
+                        ) as response:
+                            return await response.json(content_type=None)
+                    except Exception:
+                        if trial == max_trials - 1:
+                            raise
+                        await asyncio.sleep(retry_delay)
+
+        def _schedule_experience_tasks(
+            experience_groups: Sequence[ExperienceGroup]
+        ):
+
+            for experience_group in experience_groups:
+                pendings.add(
+                    asyncio.create_task(
+                        experience_group.make(
+                            _async_generate,
+                            self.env.step,
+                            getattr(self.env, "reset", None)
+                        )
+                    )
+                )
+
         if dist.get_rank() == 0:
 
-            experience_buffer = []
-            if self.pendings:
-                # Flush pendings to avoid tasks in previous steps calling the
-                # inference engine. We wait for tasks to finish at the begining 
-                # of next step rather than at the end of the last step so that 
-                # the time-consuming `env.step` can overlap with the training
-                done, self.pendings = await asyncio.wait(self.pendings)
-                experience_buffer = [task.result() for task in done]
-            self._make_request("continue_generation", self.worker_urls)
-
-            prompts_per_rollout = (
-                self.config.train_prompts_per_rollout if train else
-                self.config.test_prompts_per_rollout or len(dataloader)
-            )
+            config = self.config.train if train else self.config.test
+            dataloader = self.train_dataloader if train else self.test_dataloader
+            groups_to_complete = config.prompts_per_rollout or len(dataloader)
+            
             tbar = progress_bar(
-                total=prompts_per_rollout, desc="Rollout"
+                total=groups_to_complete, desc="Rollout"
             )
-            experiences_to_done = prompts_per_rollout
 
-            first_iter, filtered_prompts = True, 0
+            pendings, first_iter = set(), True
+            filtered_groups, completed_groups = 0, 0
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
-            if train and self.config.partial_rollout:
-                self._schedule_experience_tasks(experience_buffer)
+            if train and config.partial_rollout:
+                _schedule_experience_tasks(self.experience_buffer)
 
-            while experiences_to_done > 0:
+            while completed_groups < groups_to_complete:
 
-                if first_iter or (train and self.config.partial_rollout):
+                if first_iter or (train and config.partial_rollout):
                     experience_groups = dataloader(
-                        prompts_per_rollout - len(self.pendings)
+                        groups_to_complete - len(pendings)
                     )
-                    self._schedule_experience_tasks(experience_groups)
+                    _schedule_experience_tasks(experience_groups)
                 first_iter = False
 
-                done, self.pendings = await asyncio.wait(
-                    self.pendings, return_when=asyncio.FIRST_COMPLETED
+                done, pendings = await asyncio.wait(
+                    pendings, return_when=asyncio.FIRST_COMPLETED
                 )
 
                 for task in done:
-                    if experiences_to_done == 0:
-                        break
-                    tbar.update()
-                    experiences_to_done -= 1
+                    if completed_groups < groups_to_complete:
+                        tbar.update()
+                    completed_groups += 1
                     experience_group = task.result()
                     all_tensor_dicts_delta, metrics_delta = (
                         experience_group.to_all_tensor_dicts_and_metrics()
@@ -286,18 +281,23 @@ class Rollout:
                     for k, v in metrics_delta.items():
                         metrics[k].extend(v)
                     if (
-                        len(all_tensor_dicts_delta) > 1 and
-                        self.config.dynamic_filtering and
+                        train and config.dynamic_filtering and
+                        len(metrics_delta["rewards"]) > 1 and
                         torch.tensor(metrics_delta["rewards"]).std() == 0
                     ):
-                        filtered_prompts += 1
+                        filtered_groups += 1
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
+
             # TODO: maybe save `all_tensor_dicts`
-            self._make_request("pause_generation", self.worker_urls)
+            if train and config.partial_rollout:
+                self._make_request("pause_generation", self.worker_urls)
+                done, _ = await asyncio.wait(pendings)
+                self.experience_buffer = [task.result() for task in done]
+                self._make_request("continue_generation", self.worker_urls)
 
             metrics["dynamic_filtering_ratio"].append(
-                filtered_prompts / prompts_per_rollout
+                filtered_groups / completed_groups
             )
             suffix = "train" if train else "test"
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
@@ -332,7 +332,7 @@ class Rollout:
     ):
 
         torch.cuda.empty_cache()
-        dist.barrier()
+        dist.barrier(group=self.process_group)
         # or resume_memory_occupation() may OOM
         self._make_request(
             "resume_memory_occupation", payload={"tags": ["weights"]}
@@ -409,4 +409,4 @@ class Rollout:
         self._make_request(
             "resume_memory_occupation", payload={"tags": ["kv_cache"]}
         )
-        dist.barrier()
+        dist.barrier(group=self.process_group)

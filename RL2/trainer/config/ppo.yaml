@@ -4,38 +4,9 @@ defaults:
 - ref_actor: ${actor}
 - critic: ${actor}
 
-train_data:
-  path: null
-  prompts_per_rollout: null
-  responses_per_prompt: 1
-  max_turns: 3
-  mask_offpolicy_data: true
-  sampling_params:
-    temperature: 1.0
-    max_new_tokens: null
-    stop: null
-    no_stop_trim: true
-  prompt_key: prompt
-  messages_key: messages
-  apply_chat_template: true
-
-test_data:
-  path: null
-  prompts_per_rollout: null
-  responses_per_prompt: 1
-  max_turns: ${train_data.max_turns}
-  sampling_params:
-    temperature: 0.0
-    max_new_tokens: ${train_data.sampling_params.max_new_tokens}
-    stop: ${train_data.sampling_params.stop}
-    no_stop_trim: ${train_data.sampling_params.no_stop_trim}
-  prompt_key: ${train_data.prompt_key}
-  messages_key: ${train_data.messages_key}
-  apply_chat_template: ${train_data.apply_chat_template}
-
 actor:
   max_inference_length_per_device: ${actor.max_length_per_device}
-  temperature: ${train_data.sampling_params.temperature}
+  temperature: ${rollout.train.sampling_params.temperature}
   update_per_rollout: 1
   clip: 0.2
   tis_coef: 0.0
@@ -60,15 +31,40 @@ rollout:
     dtype: ${actor.dtype}
     tp_size: 1
     mem_fraction_static: 0.6
-  train_prompts_per_rollout: ${train_data.prompts_per_rollout}
-  test_prompts_per_rollout: ${test_data.prompts_per_rollout}
+  train:
+    path: null
+    prompts_per_rollout: null
+    responses_per_prompt: 1
+    max_turns: 3
+    partial_rollout: false
+    mask_offpolicy_data: true
+    sampling_params:
+      temperature: 1.0
+      max_new_tokens: null
+      stop: null
+      no_stop_trim: true
+    prompt_key: prompt
+    messages_key: messages
+    apply_chat_template: true
+  test_data:
+    path: null
+    prompts_per_rollout: null
+    responses_per_prompt: 1
+    max_turns: ${rollout.train.max_turns}
+    sampling_params:
+      temperature: 0.0
+      max_new_tokens: ${rollout.train.sampling_params.max_new_tokens}
+      stop: ${rollout.train.sampling_params.stop}
+      no_stop_trim: ${rollout.train.sampling_params.no_stop_trim}
+    prompt_key: ${rollout.train.prompt_key}
+    messages_key: ${rollout.train.messages_key}
+    apply_chat_template: ${rollout.train.apply_chat_template}
   env_path: null
-  partial_rollout: false
   dynamic_filtering: true
   bucket_size: 512
 
 ref_actor:
-  temperature: ${train_data.sampling_params.temperature}
+  temperature: ${rollout.train.sampling_params.temperature}
 
 critic:
   max_inference_length_per_device: ${critic.max_length_per_device}
@@ -81,7 +77,7 @@ adv:
   estimator: reinforce # `reinforce` or `gae`
   gamma: 1.0
   lamda: 1.0
-  responses_per_prompt: ${train_data.responses_per_prompt}
+  responses_per_prompt: ${rollout.train.responses_per_prompt}
   global_norm: false
   norm_var: false
   

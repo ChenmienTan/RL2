@@ -4,9 +4,9 @@ import asyncio
 from copy import deepcopy
 from collections import defaultdict
 import torch
+from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
-from RL2.datasets import get_tensor_dict
-from RL2.datasets.base import BaseDataset
+from RL2.datasets import BaseDataset, get_tensor_dict
 
 
 class Experience:
@@ -15,13 +15,14 @@ class Experience:
         self,
         config: DictConfig,
         tokenizer: AutoTokenizer,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
+        sample: Dict[str, Any]
     ):
 
         self.config = config
         self.tokenizer = tokenizer
-        self._initialize(state_text, extra_info)
+        self.sample = sample
+
+        self._initialize()
         self.sampling_params = OmegaConf.to_container(
             config.sampling_params
         )
@@ -29,21 +30,11 @@ class Experience:
         self.previous_action_text = ""
         self.previous_response_length = 0
 
-        self.initial_state_text = state_text
-        self.initial_extra_info = deepcopy(extra_info)
-
-    def _initialize(
-        self,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
-    ):
+    def _initialize(self):
         
-        self.state_text = state_text
-        self.extra_info = extra_info
+        self.state_text = None
 
         self.turn = 0
-        if state_text is not None:
-            self.state_dict = self._initialize_state_dict(state_text)
         self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
         self.rewards, self.scores = [], []
         self.metrics = defaultdict(list)
@@ -134,6 +125,7 @@ class Experience:
         self.state_text = payload["next_state"]
         return False
 
+    # TODO: make this more flexible
     async def make(
         self,
         async_generate_func: Callable,
@@ -144,13 +136,21 @@ class Experience:
         if self.done:
             if not self.config.mask_offpolicy_data:
                 return
-            self._initialize(
-                self.initial_state_text,
-                self.initial_extra_info
-            )
+            self._initialize()
 
         if self.state_text is None:
-            self.state_text, self.extra_info = await env_reset_func()
+            if self.config.path:
+                if self.config.apply_chat_template:
+                    self.state_text = self.tokenizer.apply_chat_template(
+                        self.sample[self.config.messages_key],
+                        add_generation_prompt=True,
+                        tokenize=False
+                    )
+                else:
+                    self.state_text = self.sample[self.config.prompt_key]
+                self.extra_info = deepcopy(self.sample.get("extra_info", {}))
+            else:
+                self.state_text, self.extra_info = await env_reset_func()
             self.state_dict = self._initialize_state_dict(self.state_text)
 
         while True:
@@ -201,16 +201,14 @@ class ExperienceGroup:
         self,
         config: DictConfig,
         tokenizer: AutoTokenizer,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
+        sample: Dict[str, Any]
     ):
 
         self.experiences = [
             Experience(
                 config,
                 tokenizer,
-                state_text,
-                deepcopy(extra_info)
+                sample
             )
             for _ in range(config.responses_per_prompt)
         ]
@@ -244,25 +242,32 @@ class ExperienceGroup:
 
 class RLDataset(BaseDataset):
 
-    def __getitem__(self, idx: int) -> Dict[str, Union[str, Dict[str, Any]]]:
+    def __getitem__(self, idx: int) -> ExperienceGroup:
 
         sample = self.dataset[idx]
-
-        if not self.config.path:
-            state_text = None
-        elif self.config.apply_chat_template:
-            state_text = self.tokenizer.apply_chat_template(
-                sample[self.config.messages_key],
-                add_generation_prompt=True,
-                tokenize=False
-            )
-        else:
-            state_text = sample[self.config.prompt_key]
-
-        extra_info = sample.get("extra_info", {})
         return ExperienceGroup(
             self.config,
             self.tokenizer,
-            state_text,
-            extra_info
+            sample
         )
+
+
+class StatefulCycleDataLoader(StatefulDataLoader):
+
+    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
+        """
+        Fetch a variable number of data.
+        """
+        
+        if not hasattr(self, "iterator"):
+            self.iterator = iter(self)
+
+        data_list = []
+        for _ in range(batch_size):
+            try:
+                data = next(self.iterator)
+            except StopIteration:
+                self.iterator = iter(self)
+                data = next(self.iterator)
+            data_list.append(data)
+        return data_list

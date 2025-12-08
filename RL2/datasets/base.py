@@ -52,7 +52,6 @@ def pack_tensor_dicts(
     }
 
 
-# TODO: seperate RL dataset
 class BaseDataset(Dataset):
     
     def __init__(self, config: DictConfig, tokenizer: AutoTokenizer):
@@ -161,45 +160,13 @@ class BaseDataset(Dataset):
         return len(self.dataset)
 
 
-class StatefulCycleDataLoader(StatefulDataLoader):
-
-    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
-        """
-        Fetch a variable number of data.
-        """
-        
-        if not hasattr(self, "iterator"):
-            self.iterator = iter(self)
-
-        data_list = []
-        for _ in range(batch_size):
-            try:
-                data = next(self.iterator)
-            except StopIteration:
-                self.iterator = iter(self)
-                data = next(self.iterator)
-            data_list.append(data)
-        return data_list
-
-
 def get_dataloader(
     dataset: BaseDataset, batch_size: Optional[int] = None
 ) -> StatefulDataLoader:
-
-    kwargs = {
-        "dataset": dataset,
-        "shuffle": True,
-        "drop_last": True
-    }
-    if batch_size is None:
-        return StatefulCycleDataLoader(
-            batch_size=1,
-            collate_fn=lambda batch: batch[0],
-            **kwargs
-        )
-    else:
-        return StatefulDataLoader(
-            batch_size=batch_size,
-            collate_fn=dataset.collate_fn,
-            **kwargs
-        )
+    return StatefulDataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+        collate_fn=dataset.collate_fn
+    )
