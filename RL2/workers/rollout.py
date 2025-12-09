@@ -252,7 +252,11 @@ class Rollout:
             return
 
         if self.device_mesh["tp"].get_local_rank() == 0:
-            await async_request(self.worker_url, "release_memory_occupation")
+            await async_request(
+                self.worker_url,
+                "release_memory_occupation",
+                json={"tags": ["weights", "kv_cache"]}
+            )
 
         if dist.get_rank() != 0:
             return None, None
