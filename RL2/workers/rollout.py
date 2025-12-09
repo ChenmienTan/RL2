@@ -234,7 +234,6 @@ class Rollout:
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
 
-            # TODO: maybe save sample groups
             if train and config.partial_rollout:
                 await async_request(self.worker_urls, "pause_generation")
                 done, _ = await asyncio.wait(pendings)

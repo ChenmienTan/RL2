@@ -42,6 +42,7 @@ rollout:
     prompt_key: prompt
     messages_key: messages
     apply_chat_template: true
+    save_path: null
     dynamic_filtering: true
     partial_rollout: false
     router_url: null # placeholder
@@ -56,6 +57,7 @@ rollout:
     prompt_key: ${rollout.train.prompt_key}
     messages_key: ${rollout.train.messages_key}
     apply_chat_template: ${rollout.train.apply_chat_template}
+    save_path: null
     router_url: null
   env_path: null
   bucket_size: 512

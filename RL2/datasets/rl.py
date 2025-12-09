@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Callable, Tuple
 from omegaconf import OmegaConf, DictConfig
+import json
 import asyncio
 from enum import Enum
 from copy import deepcopy
@@ -40,6 +41,13 @@ class Sample:
     status: Status = Status.RUNNING
     previous_action_text: str = ""
     previous_response_length: int = 0
+
+    def to_json(self) -> Dict[str, Any]:
+
+        data = self.__dict__
+        data["metrics"] = dict(self.metrics)
+        data["status"] = self.status.value
+        return data
 
 
 def initialize_state_dict(
@@ -225,6 +233,11 @@ class SampleGroup:
         print("[Reward]", sample.metrics["rewards"][0])
 
     def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
+
+        if self.config.save_path is not None:
+            data = [sample.to_json() for sample in self.samples]
+            with open(self.config.save_path, "a") as f:
+                f.write(json.dumps(data) + "\n")
         
         all_tensor_dicts, metrics = [], defaultdict(list)
         for sample in self.samples:
