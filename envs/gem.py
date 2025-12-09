@@ -1,3 +1,4 @@
+from typing import Dict, Any
 from omegaconf import OmegaConf, DictConfig
 import asyncio
 from collections import deque
@@ -15,40 +16,6 @@ from RL2.utils.communication import async_request
 NUM_ENVS = 16
 ENV_ID = "rg:letter_counting"
 WRAPPERS = ""
-PROMPT_TEMPLATE = "qwen3_general"
-
-def apply_no_template(observation):
-    return observation
-
-def apply_qwen3_general_template(observation):
-    return (
-        f"<|im_start|>user\nQuestion: {observation}\nPlease reason step by step,"
-        " and put your final answer within \\boxed{}.<|im_end|>\n<|im_start|>"
-        "assistant\n"
-    )
-
-def apply_qwen3_game_template(observation):
-    return (
-        "<|im_start|>user\nYou are playing language games. Make valid actions to win."
-        f"\nObservation: {observation}\nPlease reason step by step, and put your final"
-        " answer within \\boxed{}.<|im_end|>\n<|im_start|>assistant\n"
-    )
-
-def apply_code_template(observation):
-    return (
-        "You are an expert Python programmer. You will be given a question (problem"
-        " specification) and will generate a correct Python program that matches the"
-        f" specification and passes all tests.\nQuestion: {observation}"
-        "\nPlease reason step by step, and write your code in markdown format, e.g.,"
-        " ```python\n# YOUR CODE HERE\n```."
-    )
-
-TEMPLATE_FACTORY = {
-    "no": apply_no_template,
-    "qwen3_general": apply_qwen3_general_template,
-    "qwen3_game": apply_qwen3_game_template,
-    "code": apply_code_template,
-}
 
 ENV_POOL = []
 for idx in range(NUM_ENVS):
@@ -62,21 +29,30 @@ AVAILABLE_ENVS = deque(range(NUM_ENVS))
 SEMAPHORE = asyncio.Semaphore(NUM_ENVS)
 LOCK = asyncio.Lock()
 
-async def env_step(env_idx: int, action_text: str):
+async def env_step(
+    tokenizer: AutoTokenizer,
+    sample: Sample
+) -> Dict[str, Any]:
 
     (
-        next_state,
+        prompt,
         reward,
         terminated,
         truncated,
         _
-    ) = ENV_POOL[env_idx].step(action_text)
-    next_state = TEMPLATE_FACTORY[PROMPT_TEMPLATE](next_state)
+    ) = ENV_POOL[sample.sample["env_idx"]].step(sample.action_text)
+    prompt = f"Question: {prompt}\nPlease reason step by step, "\
+        "and put your final answer within \\boxed{}."
+    next_state = tokenizer.apply_chat_template(
+        {"role": "user", "content": prompt},
+        add_generation_prompt=True,
+        tokenize=False
+    )
     done = terminated or truncated
     
     if done:
         async with LOCK:
-            AVAILABLE_ENVS.append(env_idx)
+            AVAILABLE_ENVS.append(sample.sample["env_idx"])
         SEMAPHORE.release()
 
     return {
@@ -99,9 +75,15 @@ async def generate(
             await SEMAPHORE.acquire()
             async with LOCK:
                 env_idx = AVAILABLE_ENVS.popleft()
-            state_text, _ = ENV_POOL[env_idx].reset()
+            prompt, _ = ENV_POOL[env_idx].reset()
+            prompt = f"Question: {prompt}\nPlease reason step by step, "\
+                "and put your final answer within \\boxed{}."
 
-            sample.state_text = TEMPLATE_FACTORY[PROMPT_TEMPLATE](state_text)
+            sample.state_text = tokenizer.apply_chat_template(
+                {"role": "user", "content": prompt},
+                add_generation_prompt=True,
+                tokenize=False
+            )
             sample.sample["env_idx"] = env_idx
             sample.state_dict = initialize_state_dict(
                 tokenizer, sample.state_text
@@ -132,7 +114,7 @@ async def generate(
         if sample.status == Sample.Status.ABORTED:
             return
         
-        response = await env_step(sample.sample["env_idx"], sample.action_text)
+        response = await env_step(tokenizer, sample)
         add_env_response(tokenizer, sample, response)
         if sample.status == Sample.Status.DONE:
             return
