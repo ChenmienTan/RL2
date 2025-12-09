@@ -207,7 +207,6 @@ class Rollout:
                         groups_to_complete - len(pendings)
                     )
                     _schedule_tasks(sample_groups)
-                first_iter = False
 
                 done, pendings = await asyncio.wait(
                     pendings, return_when=asyncio.FIRST_COMPLETED
@@ -218,6 +217,9 @@ class Rollout:
                         tbar.update()
                     completed_groups += 1
                     sample_group = task.result()
+                    if first_iter:
+                        sample_group.print()
+                        first_iter = False
                     all_tensor_dicts_delta, metrics_delta = (
                         sample_group.to_all_tensor_dicts_and_metrics()
                     )

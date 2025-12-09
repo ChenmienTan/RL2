@@ -218,6 +218,12 @@ class SampleGroup:
         ))
         return self
     
+    def print(self):
+
+        sample = self.samples[0]
+        print(sample.state_text + sample.action_text)
+        print("[Reward]", sample.metrics["rewards"][0])
+
     def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
         all_tensor_dicts, metrics = [], defaultdict(list)
