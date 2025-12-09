@@ -295,7 +295,7 @@ class Rollout:
 
             torch.cuda.synchronize()
             serialized_tensors = []
-            for _, named_tensors in dtype_to_named_tensors.items():
+            for named_tensors in dtype_to_named_tensors.values():
 
                 flattened_tensor_bucket = FlattenedTensorBucket(named_tensors)
                 flattened_tensor_data = {
@@ -317,20 +317,26 @@ class Rollout:
                 group_dst=0,
                 group=self.device_mesh["tp"].get_group(),
             )
-            
+            # [
+            #     [tp0_bucket0, tp0_bucket1, ...],
+            #     [tp1_bucket0, tp1_bucket1, ...],
+            #     ...
+            # ]
             if self.device_mesh["tp"].get_local_rank() == 0:
 
-                num_dtypes = len(gathered_serialized_tensors[0])
-                for i in range(num_dtypes):
+                for serialized_named_tensors in zip(*gathered_serialized_tensors):
+                    # [
+                    #     (tp0_bucket0, tp1_bucket0, ...),
+                    #     (tp0_bucket1, tp1_bucket1, ...),
+                    #     ...
+                    # ]
                     # HTTP server only sends meta data. Actual weights will be directly 
                     # copied from GPUs
                     await async_request(
                         self.worker_url,
                         "update_weights_from_tensor",
                         json={
-                            "serialized_named_tensors": [
-                                tensors[i] for tensors in gathered_serialized_tensors
-                            ],
+                            "serialized_named_tensors": serialized_named_tensors,
                             "load_format": "flattened_bucket",
                             "flush_cache": False
                         }
