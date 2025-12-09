@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any, List, Tuple, Generator, Sequence
+from typing import Optional, Union, Dict, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
 import time
@@ -113,6 +113,7 @@ class Rollout:
 
     def _launch_server_process(self):
 
+        # TODO: support cross-node server
         server_args = OmegaConf.to_container(self.config.server_args)
         server_args = ServerArgs(
             enable_memory_saver=True,
@@ -250,7 +251,8 @@ class Rollout:
         if not train:
             return
 
-        await async_request(self.worker_url, "release_memory_occupation")
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            await async_request(self.worker_url, "release_memory_occupation")
 
         if dist.get_rank() != 0:
             return None, None
@@ -276,11 +278,12 @@ class Rollout:
         torch.cuda.empty_cache()
         dist.barrier(group=self.process_group)
         # or resume_memory_occupation() may OOM
-        await async_request(
-            self.worker_url,
-            "resume_memory_occupation",
-            json={"tags": ["weights"]}
-        )
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            await async_request(
+                self.worker_url,
+                "resume_memory_occupation",
+                json={"tags": ["weights"]}
+            )
 
         async def _update_tensor_bucket(
             dtype_to_named_tensors: Dict[torch.dtype, List[Tuple[str, torch.Tensor]]]
