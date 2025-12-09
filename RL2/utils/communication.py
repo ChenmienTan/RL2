@@ -88,9 +88,9 @@ async def async_request(
     async with aiohttp.ClientSession() as session:
         match method:
             case "POST":
-                req_ctx = session.post(url, **kwargs)
+                req_ctx = session.post(f"{url}/{endpoint}", **kwargs)
             case "GET":
-                req_ctx = session.get(url, **kwargs)
+                req_ctx = session.get(f"{url}/{endpoint}", **kwargs)
 
         async with req_ctx as response:
             response.raise_for_status()
