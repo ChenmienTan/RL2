@@ -42,7 +42,7 @@ class Sample:
     previous_response_length: int = 0
 
 
-def _initialize_state_dict(
+def initialize_state_dict(
     tokenizer: AutoTokenizer,
     state_text: str
 ) -> Dict[str, List[int | float]]:
@@ -56,7 +56,7 @@ def _initialize_state_dict(
         "rewards": len(state) * [0.0]
     }
 
-def _add_llm_response(sample: Sample, response: Dict[str, Any]):
+def add_llm_response(sample: Sample, response: Dict[str, Any]):
 
     # `previous_action_text` is non-empty if aborted before
     sample.action_text = sample.previous_action_text + response["text"]
@@ -74,7 +74,7 @@ def _add_llm_response(sample: Sample, response: Dict[str, Any]):
         sample.state_dict["action_mask"].extend(len(action) * [1])
         sample.state_dict["logps"].extend(logp)
         sample.state_dict["rewards"].extend(len(action) * [0.0])
-        # actual rewards will be overwritten in `_add_env_response`
+        # actual rewards will be overwritten in `add_env_response`
 
     finish_reason = meta_info["finish_reason"]["type"]
     if finish_reason == "abort":
@@ -94,23 +94,26 @@ def _add_llm_response(sample: Sample, response: Dict[str, Any]):
     sample.previous_action_text = ""
     sample.previous_response_length = 0
 
-def _add_env_response(
+def add_env_response(
     tokenizer: AutoTokenizer,
     sample: Sample,
     response: Dict[str, Any]
 ):
-    
+
+    sample.state_dict["rewards"][-1] = response["reward"]
+
     if response["done"]:
 
         sample.status = Sample.Status.DONE
-        sample.state_dict["rewards"][-1] = response["reward"]
         sample.state_dicts.append(sample.state_dict)
         sample.metrics["turns"].append(sample.turn)
-        sample.metrics["rewards"].append(response["reward"])
+        sample.metrics["rewards"].append(
+            sum([state_dict["rewards"][-1] for state_dict in sample.state_dicts])
+        )
         return
 
     if response["next_state"].startswith(sample.state_text + sample.action_text):
-        state_dict_delta = _initialize_state_dict(
+        state_dict_delta = initialize_state_dict(
             tokenizer,
             response["next_state"][len(sample.state_text + sample.action_text):]
         )
@@ -120,7 +123,7 @@ def _add_env_response(
         # If the previous state is not a prefix of the next state, the trajectory will 
         # contain multiple sequences
         sample.state_dicts.append(sample.state_dict)
-        sample.state_dict = _initialize_state_dict(
+        sample.state_dict = initialize_state_dict(
             tokenizer, response["next_state"]
         )
     sample.state_text = response["next_state"]
@@ -153,7 +156,7 @@ async def base_generate(
             else:
                 sample.state_text = sample.sample[config.prompt_key]
 
-            sample.state_dict = _initialize_state_dict(
+            sample.state_dict = initialize_state_dict(
                 tokenizer, sample.state_text
             )
 
@@ -179,12 +182,12 @@ async def base_generate(
                 "return_logprob": True
             }
         )
-        _add_llm_response(sample, response)
+        add_llm_response(sample, response)
         if sample.status == Sample.Status.ABORTED:
             return
         
         response = await env_step_fn(sample)
-        _add_env_response(tokenizer, sample, response)
+        add_env_response(tokenizer, sample, response)
         if sample.status == Sample.Status.DONE:
             return
 

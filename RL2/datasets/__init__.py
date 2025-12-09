@@ -12,5 +12,8 @@ from .rl import (
     SampleGroup,
     RLDataset,
     StatefulCycleDataLoader,
+    initialize_state_dict,
+    add_llm_response,
+    add_env_response,
     base_generate
 )
