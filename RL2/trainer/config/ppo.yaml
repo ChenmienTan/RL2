@@ -83,6 +83,7 @@ trainer:
   experiment_name: null
   load_ckpt_from: null
   total_steps: null
+  eval_only: false
   test_freq: null
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null

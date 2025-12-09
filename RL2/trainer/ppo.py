@@ -18,20 +18,27 @@ class PPOTrainer(Trainer):
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
-        self.actor = initialize_actor(config.actor, True)
-        self.actor.prepare_scheduler(
-            self.config.trainer.total_steps
-        )
-        if config.actor.kl.coef > 0:
-            self.ref_actor = initialize_actor(config.ref_actor, False)
-        if config.adv.estimator == "gae":
-            self.critic = initialize_critic(config.critic)
-            self.critic.prepare_scheduler(
+        if not config.trainer.eval_only:
+
+            self.actor = initialize_actor(config.actor, True)
+            self.actor.prepare_scheduler(
                 self.config.trainer.total_steps
             )
+            if config.actor.kl.coef > 0:
+                self.ref_actor = initialize_actor(config.ref_actor, False)
+            if config.adv.estimator == "gae":
+                self.critic = initialize_critic(config.critic)
+                self.critic.prepare_scheduler(
+                    self.config.trainer.total_steps
+                )
+
         self.rollout = initialize_rollout(config.rollout)
             
     async def train(self):
+
+        if self.config.trainer.eval_only:
+            await self.rollout(False, 0)
+            return
 
         initial = self.load_ckpt(
             (self.actor, self.critic)
