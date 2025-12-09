@@ -313,9 +313,9 @@ async def generate(
         ROUTER_URL = config.router_url
     if SERVER_URL is None:
         response = await async_request(
-            ROUTER_URL, "workers", "GET"
+            ROUTER_URL, "list_workers", "GET"
         )
-        SERVER_URL = response["workers"][0]["url"]
+        SERVER_URL = response["urls"][0]
     if MAX_TOKENS is None:
         response = await async_request(
             SERVER_URL, "v1/models", "GET"
