@@ -232,12 +232,16 @@ class SampleGroup:
         print(sample.state_text + sample.action_text)
         print("[Reward]", sample.metrics["rewards"][0])
 
-    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
+    def save(self):
 
-        if self.config.save_path is not None:
-            data = [sample.to_json() for sample in self.samples]
-            with open(self.config.save_path, "a") as f:
-                f.write(json.dumps(data) + "\n")
+        if self.config.save_path is None:
+            return
+
+        data = [sample.to_json() for sample in self.samples]
+        with open(self.config.save_path, "a") as f:
+            f.write(json.dumps(data) + "\n")
+
+    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
         all_tensor_dicts, metrics = [], defaultdict(list)
         for sample in self.samples:
