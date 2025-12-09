@@ -1,10 +1,10 @@
 torchrun \
     --nproc_per_node=4 \
     -m RL2.trainer.ppo \
-    rollout.train.path=Chenmien/GEM \
+    rollout.train.path=Chenmien/EmptyDataset \
     rollout.train.prompts_per_rollout=64 \
     rollout.train.sampling_params.max_new_tokens=1024 \
-    rollout.test.path=Chenmien/GEM \
+    rollout.test.path=Chenmien/EmptyDataset \
     rollout.test.prompts_per_rollout=64 \
     rollout.env_path=envs/gem.py \
     actor.model_name=Qwen/Qwen3-1.7B-Base \
