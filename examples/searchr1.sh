@@ -29,9 +29,9 @@ torchrun \
     rollout.train.sampling_params.max_new_tokens=512 \
     "rollout.train.sampling_params.stop=['</search>','</answer>']" \
     rollout.train.path=test@Chenmien/SearchR1 \
+    rollout.env_path=envs/searchr1.py \
     actor.model_name=Qwen/Qwen2.5-3B \
     actor.max_length_per_device=8192 \
-    rollout.env_path=envs/searchr1.py \
     trainer.project=SearchR1 \
     trainer.experiment_name=qwen2.5-3b_reinforce \
     trainer.total_steps=256 \
