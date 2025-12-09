@@ -183,7 +183,7 @@ async def base_generate(
         if sample.status == Sample.Status.ABORTED:
             return
         
-        response = await env_step_fn(config, sample)
+        response = await env_step_fn(sample)
         _add_env_response(tokenizer, sample, response)
         if sample.status == Sample.Status.DONE:
             return

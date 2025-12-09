@@ -1,5 +1,4 @@
 from typing import Dict, Any
-from omegaconf import DictConfig
 import re
 import string
 import aiohttp
@@ -23,7 +22,7 @@ def normalize_answer(s):
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
-async def env_step(config: DictConfig, sample: Sample) -> Dict[str, Any]:
+async def env_step(sample: Sample) -> Dict[str, Any]:
 
     match = re.search(
         r"<(search|answer)>(.*?)</\1>", sample.action_text, re.DOTALL
