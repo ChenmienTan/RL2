@@ -11,6 +11,9 @@ torchrun \
     actor.cp_size=2 \
     actor.max_length_per_device=8192 \
     actor.freeze_steps=4 \
+    critic.model_name=Qwen/Qwen2.5-7B \
+    critic.cp_size=2 \
+    critic.max_length_per_device=8192 \
     adv.estimator=gae \
     trainer.project=OpenReasonerZero \
     trainer.experiment_name=qwen2.5-7b-ppo \
