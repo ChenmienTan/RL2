@@ -355,7 +355,7 @@ class Rollout:
 
             tensor = tensor.to(
                 torch.cuda.current_device(), non_blocking=True
-            )
+            ).detach()
             if isinstance(tensor, DTensor):
                 # async version of `tensor.full_tensor()`
                 tensor = tensor.redistribute(
