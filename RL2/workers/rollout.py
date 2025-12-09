@@ -3,7 +3,6 @@ from omegaconf import OmegaConf, DictConfig
 import os
 import time
 import asyncio
-import requests
 import importlib
 import multiprocessing
 from collections import defaultdict
@@ -21,7 +20,11 @@ from RL2.datasets import (
     StatefulCycleDataLoader,
     SampleGroup
 )
-from RL2.utils.communication import get_host, get_available_port
+from RL2.utils.communication import (
+    get_host,
+    get_available_port,
+    async_request
+)
 from RL2.utils.logging import (
     progress_bar,
     time_logger,
@@ -158,38 +161,6 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
-    def _make_request(
-        self,
-        endpoint: str,
-        url: Optional[Union[str, List[str]]] = None,
-        payload: Dict[str, Any] = {},
-        max_trials: int = 3,
-        retry_delay: int = 1
-    ):
-
-        if self.device_mesh["tp"].get_local_rank() != 0:
-            return
-        
-        if isinstance(url, list):
-            for u in url:
-                self._make_request(
-                    endpoint, u, payload, max_trials, retry_delay
-                )
-            return
-                
-        for trial in range(max_trials):
-            try:
-                response = requests.post(
-                    f"{url or self.worker_url}/{endpoint}",
-                    json=payload
-                )
-                response.raise_for_status()
-                return
-            except Exception:
-                if trial == max_trials - 1:
-                    raise
-                time.sleep(retry_delay)
-
     @time_logger("rollout")
     async def __call__(
         self,
@@ -260,12 +231,12 @@ class Rollout:
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
 
-            # TODO: maybe save `all_tensor_dicts`
+            # TODO: maybe save sample groups
             if train and config.partial_rollout:
-                self._make_request("pause_generation", self.worker_urls)
+                await async_request(self.worker_urls, "pause_generation")
                 done, _ = await asyncio.wait(pendings)
                 self.sample_buffer = [task.result() for task in done]
-                self._make_request("continue_generation", self.worker_urls)
+                await async_request(self.worker_urls, "continue_generation")
 
             metrics["dynamic_filtering_ratio"].append(
                 filtered_groups / completed_groups
@@ -279,7 +250,7 @@ class Rollout:
         if not train:
             return
 
-        self._make_request("release_memory_occupation")
+        await async_request(self.worker_url, "release_memory_occupation")
 
         if dist.get_rank() != 0:
             return None, None
@@ -298,18 +269,20 @@ class Rollout:
         return tensor_dict, cu_seqs
     
     @torch.no_grad()
-    def update(
+    async def update(
         self, named_tensor_generator: Generator[Tuple[str, torch.Tensor], None, None]
     ):
 
         torch.cuda.empty_cache()
         dist.barrier(group=self.process_group)
         # or resume_memory_occupation() may OOM
-        self._make_request(
-            "resume_memory_occupation", payload={"tags": ["weights"]}
+        await async_request(
+            self.worker_url,
+            "resume_memory_occupation",
+            json={"tags": ["weights"]}
         )
 
-        def _update_tensor_bucket(
+        async def _update_tensor_bucket(
             dtype_to_named_tensors: Dict[torch.dtype, List[Tuple[str, torch.Tensor]]]
         ):
 
@@ -344,9 +317,10 @@ class Rollout:
                 for i in range(num_dtypes):
                     # HTTP server only sends meta data. Actual weights will be directly 
                     # copied from GPUs
-                    self._make_request(
+                    await async_request(
+                        self.worker_url,
                         "update_weights_from_tensor",
-                        payload={
+                        json={
                             "serialized_named_tensors": [
                                 tensors[i] for tensors in gathered_serialized_tensors
                             ],
@@ -362,7 +336,7 @@ class Rollout:
 
             if bucket_size > 0 and bucket_size + param_size > (self.config.bucket_size << 20):
 
-                _update_tensor_bucket(dtype_to_named_tensors)
+                await _update_tensor_bucket(dtype_to_named_tensors)
                 dtype_to_named_tensors = defaultdict(list)
                 bucket_size = 0
 
@@ -370,6 +344,7 @@ class Rollout:
                 torch.cuda.current_device(), non_blocking=True
             )
             if isinstance(tensor, DTensor):
+                # async version of `tensor.full_tensor()`
                 tensor = tensor.redistribute(
                     placements=[Replicate()] * tensor.device_mesh.ndim,
                     async_op=True
@@ -378,9 +353,12 @@ class Rollout:
             dtype_to_named_tensors[tensor.dtype].append((name, tensor))
             bucket_size += param_size
 
-        _update_tensor_bucket(dtype_to_named_tensors)
+        await _update_tensor_bucket(dtype_to_named_tensors)
 
-        self._make_request(
-            "resume_memory_occupation", payload={"tags": ["kv_cache"]}
-        )
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            await async_request(
+                self.worker_url,
+                "resume_memory_occupation",
+                json={"tags": ["kv_cache"]}
+            )
         dist.barrier(group=self.process_group)

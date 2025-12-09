@@ -167,7 +167,8 @@ async def base_generate(
     while True:
         # TODO: set `max_tokens`
         response = await async_request(
-            f"{config.router_url}/generate",
+            config.router_url,
+            "generate",
             json={
                 "input_ids": sample.state_dict["states"],
                 "sampling_params": {

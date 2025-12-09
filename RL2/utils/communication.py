@@ -1,6 +1,7 @@
 from typing import Any, Optional, List, Literal
 import os
 import socket
+import asyncio
 import aiohttp
 from datetime import timedelta
 import torch
@@ -73,10 +74,16 @@ def gather_and_concat_list(
     )
 
 async def async_request(
-    url: str,
+    url: str | List[str],
+    endpoint: str,
     method: Literal["POST", "GET"] = "POST",
     **kwargs
 ):
+    if isinstance(url, list):
+        return asyncio.gather(*(
+            async_request(u, endpoint, method, **kwargs)
+            for u in url
+        ))
 
     async with aiohttp.ClientSession() as session:
         match method:
@@ -86,5 +93,5 @@ async def async_request(
                 req_ctx = session.get(url, **kwargs)
 
         async with req_ctx as response:
-            # TODO: maybe not JSON
+            response.raise_for_status()
             return await response.json(content_type=None)
