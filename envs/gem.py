@@ -44,7 +44,7 @@ async def env_step(
     prompt = f"Question: {prompt}\nPlease reason step by step, "\
         "and put your final answer within \\boxed{}."
     next_state = tokenizer.apply_chat_template(
-        {"role": "user", "content": prompt},
+        [{"role": "user", "content": prompt}],
         add_generation_prompt=True,
         tokenize=False
     )
@@ -80,7 +80,7 @@ async def generate(
                 "and put your final answer within \\boxed{}."
 
             sample.state_text = tokenizer.apply_chat_template(
-                {"role": "user", "content": prompt},
+                [{"role": "user", "content": prompt}],
                 add_generation_prompt=True,
                 tokenize=False
             )
