@@ -60,20 +60,17 @@ class BaseDataset(Dataset):
         self.tokenizer = tokenizer
         
         # TODO: support concatnating multiple datasets
-        if config.path:
-            if "@" in config.path:
-                split, path = config.path.split("@")
-            else:
-                split, path = "train", config.path
-            ext = os.path.splitext(path)[-1].strip(".")
-            if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
-                if ext == "jsonl":
-                    ext = "json"
-                self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
-            else:
-                self.dataset = datasets.load_dataset(path, split=split)
-        else: # Gym-like environments do not require datasets
-            self.dataset = [{} for _ in range(42)]
+        if "@" in config.path:
+            split, path = config.path.split("@")
+        else:
+            split, path = "train", config.path
+        ext = os.path.splitext(path)[-1].strip(".")
+        if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
+            if ext == "jsonl":
+                ext = "json"
+            self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
+        else:
+            self.dataset = datasets.load_dataset(path, split=split)
 
     def _tokenize_prompt_response(
         self, prompt: str, response: str, rm: bool = False
