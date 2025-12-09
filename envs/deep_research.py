@@ -9,8 +9,7 @@ from transformers import AutoTokenizer
 from RL2.datasets import (
     Sample,
     initialize_state_dict,
-    add_llm_response,
-    add_env_response
+    add_llm_response
 )
 from RL2.utils.communication import async_request
 
@@ -252,9 +251,53 @@ async def env_step(sample: Sample):
     next_state: str = "<|im_end|>\n<|im_start|>user\n".join(tool_results)
     next_state: str = sample.state_text + sample.action_text + "\n<|im_start|>user\n" + next_state + "<|im_end|>\n<|im_start|>assistant\n"
     env_response["next_state"] = next_state
-    # TODO: done if reached max tokens
 
     return env_response
+
+
+def add_env_response(
+    tokenizer: AutoTokenizer,
+    sample: Sample,
+    response: Dict[str, Any]
+):
+    def _process_completed_sample():
+
+        sample.status = Sample.Status.DONE
+        sample.metrics["turns"].append(sample.turn)
+        sample.metrics["rewards"].append(
+            sum([state_dict["rewards"][-1] for state_dict in sample.state_dicts])
+        )
+
+    sample.state_dict["rewards"][-1] = response["reward"]
+
+    if response["done"]:
+
+        sample.state_dicts.append(sample.state_dict)
+        _process_completed_sample()
+        return
+
+    if response["next_state"].startswith(sample.state_text + sample.action_text):
+        state_dict_delta = initialize_state_dict(
+            tokenizer,
+            response["next_state"][len(sample.state_text + sample.action_text):]
+        )
+        if len(sample.state_dict["states"]) + len(state_dict_delta["states"]) >= MAX_TOKENS - 1:
+            sample.state_dicts.append(sample.state_dict)
+            _process_completed_sample()
+            return
+        for k, v in state_dict_delta.items():
+            sample.state_dict[k].extend(v)
+    else:
+        # If the previous state is not a prefix of the next state, the trajectory will 
+        # contain multiple sequences
+        sample.state_dicts.append(sample.state_dict)
+        sample.state_dict = initialize_state_dict(
+            tokenizer, response["next_state"]
+        )
+        if len(sample.state_dict["states"]) >= MAX_TOKENS - 1:
+            _process_completed_sample()
+            return
+    sample.state_text = response["next_state"]
 
 
 async def generate(
