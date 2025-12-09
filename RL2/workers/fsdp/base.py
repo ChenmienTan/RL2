@@ -126,6 +126,7 @@ class FSDPWorker(Worker):
     ) -> Optional[Dict[str, torch.Tensor]]:
         return gather_data(minibatches, self.device_mesh["dp"].get_group())
 
+    # TODO: maybe simplify this function
     def _load_model_to_device(self, device: Union[torch.device, str]):
     
         if not getattr(self.config, "offload_model", False):

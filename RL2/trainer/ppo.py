@@ -2,10 +2,8 @@ import hydra
 from omegaconf import DictConfig
 import asyncio
 import torch.distributed as dist
-from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import trange
 from RL2.trainer import Trainer
-from RL2.datasets import RLDataset, get_dataloader
 from RL2.workers import (
     initialize_actor,
     initialize_critic,
@@ -32,18 +30,6 @@ class PPOTrainer(Trainer):
                 self.config.trainer.total_steps
             )
         self.rollout = initialize_rollout(config.rollout)
-        self.train_dataloader = self._get_dataloader(True)
-        self.test_dataloader = self._get_dataloader(False)    
-
-    def _get_dataloader(self, train: bool) -> StatefulDataLoader:
-
-        dataset = RLDataset(
-            self.config.train_data
-            if train else self.config.test_data,
-            self.actor.tokenizer
-        )
-
-        return get_dataloader(dataset)
             
     async def train(self):
 
@@ -59,7 +45,7 @@ class PPOTrainer(Trainer):
             initial=initial
         ):
 
-            tensor_dict, cu_seqs = await self.rollout(self.train_dataloader, True, step)
+            tensor_dict, cu_seqs = await self.rollout(True, step)
 
             if self.config.actor.kl.coef > 0:
                 tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
@@ -81,9 +67,9 @@ class PPOTrainer(Trainer):
                 step
             )
 
-            self.actor.update_rollout(self.rollout, step)
+            await self.actor.update_rollout(self.rollout, step)
             if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
-                await self.rollout(self.test_dataloader, False, step)
+                await self.rollout(False, step)
 
         self.save_model(
             (self.actor, self.critic)

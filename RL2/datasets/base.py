@@ -60,20 +60,17 @@ class BaseDataset(Dataset):
         self.tokenizer = tokenizer
         
         # TODO: support concatnating multiple datasets
-        if config.path:
-            if "@" in config.path:
-                split, path = config.path.split("@")
-            else:
-                split, path = "train", config.path
-            ext = os.path.splitext(path)[-1].strip(".")
-            if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
-                if ext == "jsonl":
-                    ext = "json"
-                self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
-            else:
-                self.dataset = datasets.load_dataset(path, split=split)
-        else: # Gym-like environments do not require datasets
-            self.dataset = [{} for _ in range(42)]
+        if "@" in config.path:
+            split, path = config.path.split("@")
+        else:
+            split, path = "train", config.path
+        ext = os.path.splitext(path)[-1].strip(".")
+        if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
+            if ext == "jsonl":
+                ext = "json"
+            self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
+        else:
+            self.dataset = datasets.load_dataset(path, split=split)
 
     def _tokenize_prompt_response(
         self, prompt: str, response: str, rm: bool = False
@@ -160,45 +157,13 @@ class BaseDataset(Dataset):
         return len(self.dataset)
 
 
-class StatefulCycleDataLoader(StatefulDataLoader):
-
-    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
-        """
-        Fetch a variable number of data.
-        """
-        
-        if not hasattr(self, "iterator"):
-            self.iterator = iter(self)
-
-        data_list = []
-        for _ in range(batch_size):
-            try:
-                data = next(self.iterator)
-            except StopIteration:
-                self.iterator = iter(self)
-                data = next(self.iterator)
-            data_list.append(data)
-        return data_list
-
-
 def get_dataloader(
     dataset: BaseDataset, batch_size: Optional[int] = None
 ) -> StatefulDataLoader:
-
-    kwargs = {
-        "dataset": dataset,
-        "shuffle": True,
-        "drop_last": True
-    }
-    if batch_size is None:
-        return StatefulCycleDataLoader(
-            batch_size=1,
-            collate_fn=lambda batch: batch[0],
-            **kwargs
-        )
-    else:
-        return StatefulDataLoader(
-            batch_size=batch_size,
-            collate_fn=dataset.collate_fn,
-            **kwargs
-        )
+    return StatefulDataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+        collate_fn=dataset.collate_fn
+    )

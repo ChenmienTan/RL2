@@ -1,268 +1,271 @@
-from typing import Optional, Dict, Any, List, Union, Callable, Tuple
+from typing import Dict, Any, List, Callable, Tuple
 from omegaconf import OmegaConf, DictConfig
 import asyncio
+from enum import Enum
 from copy import deepcopy
 from collections import defaultdict
+from dataclasses import dataclass, field
 import torch
+from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
-from RL2.datasets import get_tensor_dict
-from RL2.datasets.base import BaseDataset
+from RL2.datasets import get_tensor_dict, BaseDataset
+from RL2.utils.communication import async_request
 
 
-class Experience:
+@dataclass
+class Sample:
+
+    class Status(Enum):
+
+        RUNNING = "running"
+        ABORTED = "aborted"
+        DONE = "done"
+
+    # for initialization
+    sample: Dict[str, Any] = field(default_factory=dict)
+
+    # for environment interaction
+    state_text: str = ""
+    action_text: str = ""
+
+    # for training
+    state_dict: Dict[str, List[int | float]] = field(default_factory=dict)
+    state_dicts: List[Dict[str, List[int | float]]] = field(default_factory=list)
+
+    # for logging
+    turn: int = 0
+    metrics: Dict[str, List[float | int | bool]] = field(default_factory=lambda: defaultdict(list))
+
+    # for partial rollout
+    status: Status = Status.RUNNING
+    previous_action_text: str = ""
+    previous_response_length: int = 0
+
+
+def initialize_state_dict(
+    tokenizer: AutoTokenizer,
+    state_text: str
+) -> Dict[str, List[int | float]]:
+        
+    state = tokenizer.encode(state_text, add_special_tokens=False)
+    return {
+        "states": state,
+        "actions": len(state) * [0],
+        "action_mask": len(state) * [0],
+        "logps": len(state) * [0.0],
+        "rewards": len(state) * [0.0]
+    }
+
+def add_llm_response(sample: Sample, response: Dict[str, Any]):
+
+    # `previous_action_text` is non-empty if aborted before
+    sample.action_text = sample.previous_action_text + response["text"]
+
+    # encode(decode(tokens)) may not be identical to tokens. Therefore, 
+    # token-in-token-out is necessary to guanartee that tokens fed into 
+    # training and inference engines are identical
+    # https://github.com/OpenRLHF/OpenRLHF/pull/1094
+    # https://github.com/THUDM/slime/pull/117
+    meta_info = response["meta_info"]
+    if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3: # TODO: is this condition correct?
+        logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
+        sample.state_dict["states"].extend(action)
+        sample.state_dict["actions"].extend(action)
+        sample.state_dict["action_mask"].extend(len(action) * [1])
+        sample.state_dict["logps"].extend(logp)
+        sample.state_dict["rewards"].extend(len(action) * [0.0])
+        # actual rewards will be overwritten in `add_env_response`
+
+    finish_reason = meta_info["finish_reason"]["type"]
+    if finish_reason == "abort":
+        # User may mask action tokens to avoid off-policy training
+        sample.status = Sample.Status.ABORTED
+        sample.previous_action_text = sample.action_text
+        sample.previous_response_length += meta_info["completion_tokens"]
+        return
+        
+    sample.turn += 1
+    sample.metrics["response_length"].append(
+        sample.previous_response_length + meta_info["completion_tokens"]
+    )
+    sample.metrics["length_clip_ratio"].append(finish_reason == "length")
+
+    # reset if not aborted
+    sample.previous_action_text = ""
+    sample.previous_response_length = 0
+
+def add_env_response(
+    tokenizer: AutoTokenizer,
+    sample: Sample,
+    response: Dict[str, Any]
+):
+
+    sample.state_dict["rewards"][-1] = response["reward"]
+
+    if response["done"]:
+
+        sample.status = Sample.Status.DONE
+        sample.state_dicts.append(sample.state_dict)
+        sample.metrics["turns"].append(sample.turn)
+        sample.metrics["rewards"].append(
+            sum([state_dict["rewards"][-1] for state_dict in sample.state_dicts])
+        )
+        return
+
+    if response["next_state"].startswith(sample.state_text + sample.action_text):
+        state_dict_delta = initialize_state_dict(
+            tokenizer,
+            response["next_state"][len(sample.state_text + sample.action_text):]
+        )
+        for k, v in state_dict_delta.items():
+            sample.state_dict[k].extend(v)
+    else:
+        # If the previous state is not a prefix of the next state, the trajectory will 
+        # contain multiple sequences
+        sample.state_dicts.append(sample.state_dict)
+        sample.state_dict = initialize_state_dict(
+            tokenizer, response["next_state"]
+        )
+    sample.state_text = response["next_state"]
+
+async def base_generate(
+    config: DictConfig,
+    tokenizer: AutoTokenizer,
+    sample: Sample,
+    env_step_fn: Callable
+):
+    """
+    A typical generate function where user only needs to provide the `env_step` 
+    function. User may provide their own `generate` function for advanced use.
+    """
+    sampling_params = OmegaConf.to_container(config.sampling_params)
+
+    match sample.status:
+
+        case Sample.Status.RUNNING:
+
+            # For Gym-like environments, `reset` function should be called to 
+            # obtain the initial state
+            if config.apply_chat_template:
+                # User may provide tools
+                sample.state_text = tokenizer.apply_chat_template(
+                    sample.sample[config.messages_key],
+                    add_generation_prompt=True,
+                    tokenize=False
+                )
+            else:
+                sample.state_text = sample.sample[config.prompt_key]
+
+            sample.state_dict = initialize_state_dict(
+                tokenizer, sample.state_text
+            )
+
+        case Sample.Status.ABORTED:
+            sample.status = Sample.Status.RUNNING
+
+        case Sample.Status.DONE:
+            # User may treat this case as `RUNNING` to avoid off-policy training
+            return
+
+    while True:
+        # TODO: set `max_tokens`
+        response = await async_request(
+            config.router_url,
+            "generate",
+            json={
+                "input_ids": sample.state_dict["states"],
+                "sampling_params": {
+                    **sampling_params,
+                    "max_new_tokens": sampling_params["max_new_tokens"] - sample.previous_response_length,
+                    "no_stop_trim": True
+                },
+                "return_logprob": True
+            }
+        )
+        add_llm_response(sample, response)
+        if sample.status == Sample.Status.ABORTED:
+            return
+        
+        response = await env_step_fn(sample)
+        add_env_response(tokenizer, sample, response)
+        if sample.status == Sample.Status.DONE:
+            return
+
+
+class SampleGroup:
 
     def __init__(
         self,
         config: DictConfig,
         tokenizer: AutoTokenizer,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
+        sample: Dict[str, Any]
     ):
 
         self.config = config
         self.tokenizer = tokenizer
-        self._initialize(state_text, extra_info)
-        self.sampling_params = OmegaConf.to_container(
-            config.sampling_params
-        )
-
-        self.previous_action_text = ""
-        self.previous_response_length = 0
-
-        self.initial_state_text = state_text
-        self.initial_extra_info = deepcopy(extra_info)
-
-    def _initialize(
-        self,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
-    ):
-        
-        self.state_text = state_text
-        self.extra_info = extra_info
-
-        self.turn = 0
-        if state_text is not None:
-            self.state_dict = self._initialize_state_dict(state_text)
-        self.state_dicts: List[Dict[str, List[Union[int, float]]]] = []
-        self.rewards, self.scores = [], []
-        self.metrics = defaultdict(list)
-
-        self.done = False
-
-    def _initialize_state_dict(
-        self, state_text: str
-    ) -> Dict[str, List[Union[int, float]]]:
-        
-        state = self.tokenizer.encode(state_text, add_special_tokens=False)
-        return {
-            "states": state,
-            "actions": len(state) * [0],
-            "action_mask": len(state) * [0],
-            "logps": len(state) * [0.0],
-            "rewards": len(state) * [0.0]
-        }
-
-    def _add_llm_response(self, payload: Dict[str, Any]) -> bool:
-
-        # `previous_action_text` is not empty if aborted before
-        self.action_text = self.previous_action_text + payload["text"]
-
-        # encode(decode(tokens)) may not be identical to tokens. Therefore, 
-        # token-in-token-out is necessary to guanartee that tokens fed into 
-        # training and inference engines are identical
-        # https://github.com/OpenRLHF/OpenRLHF/pull/1094
-        # https://github.com/THUDM/slime/pull/117
-        meta_info = payload["meta_info"]
-        if "output_token_logprobs" in meta_info and len(meta_info["output_token_logprobs"][0]) == 3:
-            logp, action, _ = map(list, zip(*meta_info["output_token_logprobs"]))
-            self.state_dict["states"].extend(action)
-            self.state_dict["actions"].extend(action)
-            self.state_dict["action_mask"].extend(len(action) * [1])
-            self.state_dict["logps"].extend(logp)
-
-        finish_reason = meta_info["finish_reason"]["type"]
-        if finish_reason == "abort":
-            if self.config.mask_offpolicy_data:
-                # mask previous actions to guarantee fully onpolicy training
-                length = len(self.state_dict["states"])
-                self.state_dict["actions"] = length * [0]
-                self.state_dict["action_mask"] = length * [0]
-                self.state_dict["logps"] = length * [0.0]
-                self.state_dicts = self.state_dicts[-1:]
-            self.previous_action_text = self.action_text
-            self.previous_response_length += meta_info["completion_tokens"]
-            return True
-        
-        self.turn += 1
-        self.metrics["response_length"].append(
-            self.previous_response_length + meta_info["completion_tokens"]
-        )
-        self.metrics["length_clip_ratio"].append(finish_reason == "length")
-
-        # reset if not aborted
-        self.previous_action_text = ""
-        self.previous_response_length = 0
-        return False
-
-    def _add_env_response(self, payload: Dict[str, Any]) -> bool:
-        
-        self.extra_info = payload["extra_info"]
-        self.state_dict["rewards"].extend(
-            (
-                len(self.state_dict["states"]) - len(self.state_dict["rewards"]) - 1
-            ) * [0] + [payload["reward"]]
-        )
-        self.rewards.append(payload["reward"])
-        self.scores.append(payload["score"])
-
-        if self.turn == self.config.max_turns or payload["done"]:
-            self.state_dicts.append(self.state_dict)
-            self.metrics["n_turns"].append(self.turn)
-            self.metrics["rewards"].append(sum(self.rewards))
-            self.metrics["scores"].append(sum(self.scores))
-            return True
-        if payload["next_state"].startswith(self.state_text + self.action_text):
-            state_dict_delta = self._initialize_state_dict(
-                payload["next_state"][len(self.state_text + self.action_text):]
-            )
-            for k, v in state_dict_delta.items():
-                self.state_dict[k].extend(v)
-        else:
-            self.state_dicts.append(self.state_dict)
-            self.state_dict = self._initialize_state_dict(payload["next_state"])
-        self.state_text = payload["next_state"]
-        return False
-
-    async def make(
-        self,
-        async_generate_func: Callable,
-        env_step_func: Callable,
-        env_reset_func: Optional[Callable]
-    ):
-        
-        if self.done:
-            if not self.config.mask_offpolicy_data:
-                return
-            self._initialize(
-                self.initial_state_text,
-                self.initial_extra_info
-            )
-
-        if self.state_text is None:
-            self.state_text, self.extra_info = await env_reset_func()
-            self.state_dict = self._initialize_state_dict(self.state_text)
-
-        while True:
-
-            abort = self._add_llm_response(
-                await async_generate_func(
-                    self.state_dict["states"],
-                    {
-                        **self.sampling_params,
-                        "max_new_tokens": self.sampling_params["max_new_tokens"] - self.previous_response_length
-                    }
-                )
-            )
-            if abort:
-                return
-            self.done = self._add_env_response(
-                await env_step_func(
-                    self.state_text,
-                    self.action_text,
-                    self.extra_info
-                )
-            )
-            if self.done:
-                return
-
-    def to_tensor_dicts_and_metrics(self) -> Tuple[List[Dict[str, torch.Tensor]], Dict[str, List[Union[float, int, bool]]]]:
-
-        tensor_dicts = []
-        for state_dict in self.state_dicts:
-            tensor_dict = get_tensor_dict(
-                state_dict["states"],
-                state_dict["actions"],
-                state_dict["action_mask"]
-            )
-            tensor_dict["llm_logps"] = torch.FloatTensor(
-                state_dict["logps"][1:]
-            )
-            tensor_dict["rewards"] = torch.FloatTensor(
-                state_dict["rewards"][1:]
-            )
-            tensor_dicts.append(tensor_dict)
-        return tensor_dicts, self.metrics
-
-
-class ExperienceGroup:
-
-    def __init__(
-        self,
-        config: DictConfig,
-        tokenizer: AutoTokenizer,
-        state_text: Optional[str],
-        extra_info: Dict[str, Any]
-    ):
-
-        self.experiences = [
-            Experience(
-                config,
-                tokenizer,
-                state_text,
-                deepcopy(extra_info)
-            )
+        self.samples = [
+            Sample(sample=deepcopy(sample))
             for _ in range(config.responses_per_prompt)
         ]
 
-    async def make(
-        self,
-        async_generate_func: Callable,
-        env_step_func: Callable,
-        env_reset_func: Optional[Callable]
-    ) -> "ExperienceGroup":
+    async def generate(self, generate_fn: Callable) -> "SampleGroup":
+        """
+        This function packs the generation tasks of samples within a group into a single task so that they will return togather.
+        """
         await asyncio.gather(*(
-            experience.make(
-                async_generate_func,
-                env_step_func,
-                env_reset_func
-            )
-            for experience in self.experiences
+            generate_fn(self.config, self.tokenizer, sample)
+            for sample in self.samples
         ))
         return self
     
-    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[Union[float, int, bool]]]]:
+    def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
         all_tensor_dicts, metrics = [], defaultdict(list)
-        for experience in self.experiences:
-            tensor_dicts, metrics_delta = experience.to_tensor_dicts_and_metrics()
+        for sample in self.samples:
+            tensor_dicts = []
+            for state_dict in sample.state_dicts:
+                tensor_dict = get_tensor_dict(
+                    state_dict["states"],
+                    state_dict["actions"],
+                    state_dict["action_mask"],
+                )
+                tensor_dict["llm_logps"] = torch.FloatTensor(
+                    state_dict["logps"][1:]
+                )
+                tensor_dict["rewards"] = torch.FloatTensor(
+                    state_dict["rewards"][1:]
+                )
+                tensor_dicts.append(tensor_dict)
             all_tensor_dicts.append(tensor_dicts)
-            for k, v in metrics_delta.items():
+            for k, v in sample.metrics.items():
                 metrics[k].extend(v)
         return all_tensor_dicts, metrics
 
 
 class RLDataset(BaseDataset):
 
-    def __getitem__(self, idx: int) -> Dict[str, Union[str, Dict[str, Any]]]:
+    def __getitem__(self, idx: int) -> SampleGroup:
 
-        ex = self.dataset[idx]
+        sample = self.dataset[idx]
+        return SampleGroup(self.config, self.tokenizer, sample)
 
-        if not self.config.path:
-            state_text = None
-        elif self.config.apply_chat_template:
-            state_text = self.tokenizer.apply_chat_template(
-                ex[self.config.messages_key],
-                add_generation_prompt=True,
-                tokenize=False
-            )
-        else:
-            state_text = ex[self.config.prompt_key]
 
-        extra_info = ex.get("extra_info", {})
-        return ExperienceGroup(
-            self.config,
-            self.tokenizer,
-            state_text,
-            extra_info
-        )
+class StatefulCycleDataLoader(StatefulDataLoader):
+
+    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
+        """
+        Fetch a variable number of data.
+        """
+        
+        if not hasattr(self, "iterator"):
+            self.iterator = iter(self)
+
+        data_list = []
+        for _ in range(batch_size):
+            try:
+                data = next(self.iterator)
+            except StopIteration:
+                self.iterator = iter(self)
+                data = next(self.iterator)
+            data_list.append(data)
+        return data_list

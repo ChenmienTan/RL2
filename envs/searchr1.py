@@ -1,6 +1,9 @@
+from typing import Dict, Any
 import re
 import string
 import aiohttp
+from functools import partial
+from RL2.datasets import Sample, base_generate
 
 def normalize_answer(s):
 
@@ -19,20 +22,14 @@ def normalize_answer(s):
 
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
-async def step(state, action, extra_info):
+async def env_step(sample: Sample) -> Dict[str, Any]:
 
     match = re.search(
-        r"<(search|answer)>(.*?)</\1>", action, re.DOTALL
+        r"<(search|answer)>(.*?)</\1>", sample.action_text, re.DOTALL
     )
-    env_response = {
-        "next_state": None,
-        "reward": 0.0,
-        "score": 0.0,
-        "done": False,
-        "extra_info": extra_info
-    }
+    env_response = {"next_state": None, "done": False, "reward": 0.0}
     if match is None:
-        env_response["next_state"] = state + action + "\nMy previous action is invalid. \
+        env_response["next_state"] = sample.state_text + sample.action_text + "\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
 If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n"
     elif match.group(1) == "search":
@@ -44,20 +41,21 @@ If I want to give the final answer, I should put the answer between <answer> and
             ) as response:
                 try:
                     passage = (await response.json())["passage"].strip()
-                    env_response["next_state"] = state + action + f"\n\n<information>{passage}</information>\n\n"
+                    env_response["next_state"] = sample.state_text + sample.action_text + f"\n\n<information>{passage}</information>\n\n"
                 except:
-                    env_response["next_state"] = state + action + "\nThe query exceeded the maximum length allowed. Let me try again.\n"
+                    env_response["next_state"] = sample.state_text + sample.action_text + "\nThe query exceeded the maximum length allowed. Let me try again.\n"
     else:
+        env_response["done"] = True
         pred = normalize_answer(match.group(2).strip())
 
-        answer = extra_info["answer"]
+        answer = sample.sample["answer"]
         if isinstance(answer, str):
             answer = [answer]
         answer = [normalize_answer(a) for a in answer]
 
         reward = float(pred in answer)
         env_response["reward"] = reward
-        env_response["score"] = reward
-        env_response["done"] = True
 
     return env_response
+
+generate = partial(base_generate, env_step_fn=env_step)
