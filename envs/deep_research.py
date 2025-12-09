@@ -243,7 +243,7 @@ async def env_step(sample: Sample):
     tool_results: List[str] = await asyncio.gather(*[
         _call_tool(
             tool_call["name"],
-            json.loads(tool_call["arguments"])
+            json.loads(tool_call["parameters"])
         )
         for tool_call in tool_calls
     ])
