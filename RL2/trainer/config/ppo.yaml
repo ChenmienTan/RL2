@@ -35,12 +35,10 @@ rollout:
     path: null
     prompts_per_rollout: null
     responses_per_prompt: 1
-    max_turns: 3
     sampling_params:
       temperature: 1.0
       max_new_tokens: null
       stop: null
-      no_stop_trim: true
     prompt_key: prompt
     messages_key: messages
     apply_chat_template: true
@@ -51,12 +49,10 @@ rollout:
     path: null
     prompts_per_rollout: null
     responses_per_prompt: 1
-    max_turns: ${rollout.train.max_turns}
     sampling_params:
       temperature: 0.0
       max_new_tokens: ${rollout.train.sampling_params.max_new_tokens}
       stop: ${rollout.train.sampling_params.stop}
-      no_stop_trim: ${rollout.train.sampling_params.no_stop_trim}
     prompt_key: ${rollout.train.prompt_key}
     messages_key: ${rollout.train.messages_key}
     apply_chat_template: ${rollout.train.apply_chat_template}

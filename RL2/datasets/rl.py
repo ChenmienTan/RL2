@@ -1,10 +1,10 @@
 from typing import Dict, Any, List, Callable, Tuple
 from omegaconf import OmegaConf, DictConfig
-from enum import Enum
-from dataclasses import dataclass, field
 import asyncio
+from enum import Enum
 from copy import deepcopy
 from collections import defaultdict
+from dataclasses import dataclass, field
 import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
@@ -74,10 +74,11 @@ def _add_llm_response(sample: Sample, response: Dict[str, Any]):
         sample.state_dict["action_mask"].extend(len(action) * [1])
         sample.state_dict["logps"].extend(logp)
         sample.state_dict["rewards"].extend(len(action) * [0.0])
-        # actual rewards will be overwritten when scoring
+        # actual rewards will be overwritten in `_add_env_response`
 
     finish_reason = meta_info["finish_reason"]["type"]
     if finish_reason == "abort":
+        # User may mask action tokens to avoid off-policy training
         sample.status = Sample.Status.ABORTED
         sample.previous_action_text = sample.action_text
         sample.previous_response_length += meta_info["completion_tokens"]
@@ -116,6 +117,8 @@ def _add_env_response(
         for k, v in state_dict_delta.items():
             sample.state_dict[k].extend(v)
     else:
+        # If the previous state is not a prefix of the next state, the trajectory will 
+        # contain multiple sequences
         sample.state_dicts.append(sample.state_dict)
         sample.state_dict = _initialize_state_dict(
             tokenizer, response["next_state"]
@@ -141,7 +144,7 @@ async def base_generate(
             # For Gym-like environments, `reset` function should be called to 
             # obtain the initial state
             if config.apply_chat_template:
-                # User may provide tools if needed
+                # User may provide tools
                 sample.state_text = tokenizer.apply_chat_template(
                     sample.sample[config.messages_key],
                     add_generation_prompt=True,
@@ -158,17 +161,19 @@ async def base_generate(
             sample.status = Sample.Status.RUNNING
 
         case Sample.Status.DONE:
+            # User may treat this case as `RUNNING` to avoid off-policy training
             return
 
     while True:
-        
+        # TODO: set `max_tokens`
         response = await async_request(
             f"{config.router_url}/generate",
             json={
                 "input_ids": sample.state_dict["states"],
                 "sampling_params": {
                     **sampling_params,
-                    "max_new_tokens": sampling_params["max_new_tokens"] - sample.previous_response_length
+                    "max_new_tokens": sampling_params["max_new_tokens"] - sample.previous_response_length,
+                    "no_stop_trim": True
                 },
                 "return_logprob": True
             }
@@ -200,6 +205,9 @@ class SampleGroup:
         ]
 
     async def generate(self, generate_fn: Callable) -> "SampleGroup":
+        """
+        This function packs the generation tasks of samples within a group into a single task so that they will return togather.
+        """
         await asyncio.gather(*(
             generate_fn(self.config, self.tokenizer, sample)
             for sample in self.samples
