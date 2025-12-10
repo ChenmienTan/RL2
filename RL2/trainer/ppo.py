@@ -9,7 +9,11 @@ from RL2.workers import (
     initialize_critic,
     initialize_rollout
 )
-from RL2.utils.communication import initialize_global_process_group
+from RL2.utils.communication import (
+    initialize_global_process_group,
+    open_session,
+    close_session
+)
 from RL2.utils.algorithms import compute_advantages
 
 
@@ -35,6 +39,8 @@ class PPOTrainer(Trainer):
         self.rollout = initialize_rollout(config.rollout)
             
     async def train(self):
+
+        await open_session()
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
@@ -83,6 +89,8 @@ class PPOTrainer(Trainer):
             if self.config.adv.estimator == "gae"
             else (self.actor,)
         )
+
+        await close_session()
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
