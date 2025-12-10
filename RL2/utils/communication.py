@@ -19,11 +19,27 @@ def get_available_port() -> int:
         s.listen(1)
         return s.getsockname()[1]
 
-def initialize_global_process_group(timeout_second=36000):
+def initialize_global_process_group(
+    create_gloo_group: bool = False,
+    timeout_second: int =36000
+):
     
-    dist.init_process_group("nccl", timeout=timedelta(seconds=timeout_second))
+    dist.init_process_group(
+        "nccl",
+        timeout=timedelta(seconds=timeout_second)
+    )
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
+
+    if create_gloo_group:
+
+        world_size = dist.get_world_size()
+        global GLOO_GROUP
+        GLOO_GROUP = dist.new_group(
+            ranks=list(range(world_size)),
+            timeout=timedelta(seconds=timeout_second),
+            backend="gloo"
+        )
 
 def _unwrap_process_group(
     process_group: dist.ProcessGroup

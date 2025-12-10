@@ -23,6 +23,7 @@ from RL2.datasets import (
 from RL2.utils.communication import (
     get_host,
     get_available_port,
+    GLOO_GROUP,
     async_request
 )
 from RL2.utils.logging import (
@@ -82,10 +83,6 @@ class Rollout:
         assert world_size % tp_size == 0, \
             f"World_size {world_size} must be divisible by tp_size {tp_size}."
 
-        self.process_group = dist.new_group(
-            ranks=list(range(world_size)),
-            backend="gloo"
-        )
         self.device_mesh = dist.device_mesh.init_device_mesh(
             "cpu",
             mesh_dim_names=("dp", "tp"),
@@ -248,7 +245,7 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
-        dist.barrier(group=self.process_group)
+        dist.barrier(group=GLOO_GROUP)
 
         if not train:
             return
@@ -282,7 +279,7 @@ class Rollout:
     ):
 
         torch.cuda.empty_cache()
-        dist.barrier(group=self.process_group)
+        dist.barrier(group=GLOO_GROUP)
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             await async_request(
@@ -376,4 +373,4 @@ class Rollout:
                 "resume_memory_occupation",
                 json={"tags": ["kv_cache"]}
             )
-        dist.barrier(group=self.process_group)
+        dist.barrier(group=GLOO_GROUP)
