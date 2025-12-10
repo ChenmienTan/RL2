@@ -217,7 +217,7 @@ class Rollout:
                     if first_iter:
                         sample_group.print()
                         first_iter = False
-                    await asyncio.to_thread(sample_group.save)
+                    await asyncio.to_thread(sample_group.save, step)
                     all_tensor_dicts_delta, metrics_delta = (
                         sample_group.to_all_tensor_dicts_and_metrics()
                     )

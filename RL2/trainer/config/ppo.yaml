@@ -33,31 +33,31 @@ rollout:
     mem_fraction_static: 0.6
   train:
     path: null
+    prompt_key: prompt
+    messages_key: messages
+    apply_chat_template: true
     prompts_per_rollout: null
     responses_per_prompt: 1
     sampling_params:
       temperature: 1.0
       max_new_tokens: null
       stop: null
-    prompt_key: prompt
-    messages_key: messages
-    apply_chat_template: true
-    save_path: null
     dynamic_filtering: true
     partial_rollout: false
+    save_dir: ${trainer.save_dir}/train
     router_url: null # placeholder
   test:
     path: null
+    prompt_key: ${rollout.train.prompt_key}
+    messages_key: ${rollout.train.messages_key}
+    apply_chat_template: ${rollout.train.apply_chat_template}
     prompts_per_rollout: null
     responses_per_prompt: 1
     sampling_params:
       temperature: 0.0
       max_new_tokens: ${rollout.train.sampling_params.max_new_tokens}
       stop: ${rollout.train.sampling_params.stop}
-    prompt_key: ${rollout.train.prompt_key}
-    messages_key: ${rollout.train.messages_key}
-    apply_chat_template: ${rollout.train.apply_chat_template}
-    save_path: null
+    save_dir: ${trainer.save_dir}/test
     router_url: null
   env_path: null
   bucket_size: 512

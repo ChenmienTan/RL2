@@ -44,7 +44,7 @@ class Sample:
 
     def to_json(self) -> Dict[str, Any]:
 
-        data = self.__dict__
+        data = dict(self)
         data["metrics"] = dict(self.metrics)
         data["status"] = self.status.value
         return data
@@ -229,16 +229,14 @@ class SampleGroup:
     def print(self):
 
         sample = self.samples[0]
+        print("\n")
         print(sample.state_text + sample.action_text)
         print("[Reward]", sample.metrics["rewards"][0])
 
-    def save(self):
-
-        if self.config.save_path is None:
-            return
-
+    def save(self, step):
+        
         data = [sample.to_json() for sample in self.samples]
-        with open(self.config.save_path, "a") as f:
+        with open(f"{self.config.save_dir}/step{step}.jsonl", "a") as f:
             f.write(json.dumps(data) + "\n")
 
     def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
