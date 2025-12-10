@@ -73,6 +73,9 @@ def gather_and_concat_list(
         else None
     )
 
+SESSION = None
+LOCK = asyncio.Lock()
+
 async def async_request(
     url: str | List[str],
     endpoint: str,
@@ -85,13 +88,21 @@ async def async_request(
             for u in url
         ))
 
-    async with aiohttp.ClientSession() as session:
-        match method:
-            case "POST":
-                req_ctx = session.post(f"{url}/{endpoint}", **kwargs)
-            case "GET":
-                req_ctx = session.get(f"{url}/{endpoint}", **kwargs)
+    global SESSION
+    # guarantee that only a single session is created
+    async with LOCK:
+        if SESSION is None:
+            SESSION = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=0),
+                timeout=aiohttp.ClientTimeout(total=None)
+            )
 
-        async with req_ctx as response:
-            response.raise_for_status()
-            return await response.json(content_type=None)
+    match method:
+        case "POST":
+            req_ctx = SESSION.post(f"{url}/{endpoint}", **kwargs)
+        case "GET":
+            req_ctx = SESSION.get(f"{url}/{endpoint}", **kwargs)
+
+    async with req_ctx as response:
+        response.raise_for_status()
+        return await response.json(content_type=None)
