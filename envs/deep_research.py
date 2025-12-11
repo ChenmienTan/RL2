@@ -169,19 +169,17 @@ async def visit(url: str | List[str], goal: str) -> str:
         results = await asyncio.gather(*[visit(u, goal) for u in url])
         return "\n=======\n".join(results)
 
-    response = await async_request(
-        "https://api.ydc-index.io",
-        "v1/contents",
-        headers={
-            "X-API-Key": os.environ["YDC_API_KEY"],
-            "Content-Type": "application/json"
-        },
-        json={
-            "urls": [url],
-            "format": "markdown"
-        }
+    headers = {
+        "Authorization": f"Bearer {os.environ['JINA_API_KEY']}",
+        "X-Token-Budget": "256000"
+        # TODO: truncate
+    }
+    webpage_content = await async_request(
+        "https://r.jina.ai",
+        url,
+        "GET",
+        headers=headers
     )
-    webpage_content = response[0]["markdown"]
 
     response = await _call_llm(
         SUMMARY_TEMPLATE.format(
