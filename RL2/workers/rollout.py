@@ -120,7 +120,7 @@ class Rollout:
             **server_args
         )
         self.worker_url = server_args.url()
-        launch_server_process(server_args)
+        self.server_process = launch_server_process(server_args)
 
     def _launch_router_process(self):
 
@@ -131,12 +131,12 @@ class Rollout:
             log_level="error"
         )
         self.config.train.router_url = self.config.test.router_url = f"http://{router_args.host}:{router_args.port}"
-        process = multiprocessing.Process(
+        self.router_process = multiprocessing.Process(
             target=launch_router, args=(router_args,)
         )
-        process.start()
+        self.router_process.start()
         time.sleep(3)
-        assert process.is_alive()
+        assert self.router_process.is_alive()
 
     def _prepare_dataloader(self, train: bool):
         
@@ -374,3 +374,11 @@ class Rollout:
                 json={"tags": ["kv_cache"]}
             )
         dist.barrier(group=GLOO_GROUP)
+
+    def close(self):
+
+        if dist.get_rank() == 0:
+            self.router_process.terminate()
+
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self.server_process.terminate()
