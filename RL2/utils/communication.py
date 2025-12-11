@@ -1,5 +1,6 @@
 from typing import Any, Optional, List, Literal
 import os
+import json
 import socket
 import asyncio
 import aiohttp
@@ -120,4 +121,7 @@ async def async_request(
 
     async with req_ctx as response:
         response.raise_for_status()
-        return await response.json(content_type=None)
+        try:
+            return await response.json(content_type=None)
+        except json.decoder.JSONDecodeError:
+            return await response.text()
