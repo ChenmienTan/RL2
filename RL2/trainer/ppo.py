@@ -44,6 +44,8 @@ class PPOTrainer(Trainer):
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
+            await close_session()
+            self.rollout.close()
             return
 
         initial = self.load_ckpt(
