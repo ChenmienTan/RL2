@@ -44,7 +44,7 @@ class Sample:
 
     def to_json(self) -> Dict[str, Any]:
 
-        data = dict(self)
+        data = self.__dict__
         data["metrics"] = dict(self.metrics)
         data["status"] = self.status.value
         return data
