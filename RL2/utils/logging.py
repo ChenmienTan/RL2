@@ -17,24 +17,47 @@ def progress_bar(*args, **kwargs) -> tqdm:
     )
 
 def time_logger(name: str) -> Callable:
+
     def decorator(func: Callable) -> Callable:
+
         sig = inspect.signature(func)
         param_names = list(sig.parameters.keys())
         assert "step" in param_names
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
+
+        def _log_time(args, kwargs, start):
+
+            if not dist.get_rank() == 0:
+                return
+
             if "step" in kwargs:
                 step = kwargs["step"]
             else:
                 step = args[param_names.index("step")]
-            start = time.time()
-            output = func(*args, **kwargs)
-            if dist.get_rank() == 0:
-                wandb.log({
-                    f"timing/{name}": time.time() - start
-                }, step=step)
-            return output
+
+            wandb.log({
+                f"timing/{name}": time.perf_counter() - start
+            }, step=step)
+
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs) -> Any:
+                start = time.pref_counter()
+                output = await func(*args, **kwargs)
+                _log_time(args, kwargs, start)
+                return output
+
+        else:
+
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs) -> Any:
+                start = time.perf_counter()
+                output = func(*args, **kwargs)
+                _log_time(args, kwargs, start)
+                return output
+
         return wrapper
+
     return decorator
 
 def gather_and_log(
