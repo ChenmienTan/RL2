@@ -42,7 +42,7 @@ def time_logger(name: str) -> Callable:
 
             @functools.wraps(func)
             async def wrapper(*args, **kwargs) -> Any:
-                start = time.pref_counter()
+                start = time.perf_counter()
                 output = await func(*args, **kwargs)
                 _log_time(args, kwargs, start)
                 return output
