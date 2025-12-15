@@ -280,7 +280,7 @@ class SampleGroup:
             all_critic_tensor_dicts.append(critic_tensor_dicts)
             for k, v in sample.metrics.items():
                 metrics[k].extend(v)
-        return all_tensor_dicts, metrics
+        return all_tensor_dicts, all_critic_tensor_dicts, metrics
 
 
 class RLDataset(BaseDataset):
