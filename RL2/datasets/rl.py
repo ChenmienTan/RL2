@@ -258,19 +258,22 @@ class SampleGroup:
                 tensor_dict["rewards"] = torch.FloatTensor(
                     state_dict["rewards"][1:]
                 )
-                answer_tokens = self.tokenizer.encode(
-                    self.samples[0].sample["answer"],
-                    add_special_tokens=False,
-                    return_tensors="pt"
-                ).squeeze(0)
-                critic_tensor_dict = {
-                    k: torch.cat((
-                        answer_tokens if k == "states"
-                        else torch.zeros((len(answer_tokens),), dtype=v.dtype),
-                        v
-                    ))
-                    for k, v in tensor_dict.items()
-                }
+                if self.config.enable_privileged_critic:
+                    answer_tokens = self.tokenizer.encode(
+                        self.samples[0].sample["answer"],
+                        add_special_tokens=False,
+                        return_tensors="pt"
+                    ).squeeze(0)
+                    critic_tensor_dict = {
+                        k: torch.cat((
+                            answer_tokens if k == "states"
+                            else torch.zeros((len(answer_tokens),), dtype=v.dtype),
+                            v
+                        ))
+                        for k, v in tensor_dict.items()
+                    }
+                else:
+                    critic_tensor_dict = tensor_dict
                 tensor_dicts.append(tensor_dict)
                 critic_tensor_dicts.append(critic_tensor_dict)
             all_tensor_dicts.append(tensor_dicts)

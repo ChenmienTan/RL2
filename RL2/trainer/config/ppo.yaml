@@ -44,6 +44,7 @@ rollout:
       stop: null
     dynamic_filtering: true
     partial_rollout: false
+    enable_privileged_critic: false
     save_dir: ${trainer.save_dir}/train
     router_url: null # placeholder
   test:
