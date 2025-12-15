@@ -243,9 +243,9 @@ class SampleGroup:
 
     def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
-        all_tensor_dicts, metrics = [], defaultdict(list)
+        all_tensor_dicts, all_critic_tensor_dicts, metrics = [], [], defaultdict(list)
         for sample in self.samples:
-            tensor_dicts = []
+            tensor_dicts, critic_tensor_dicts = [], []
             for state_dict in sample.state_dicts:
                 tensor_dict = get_tensor_dict(
                     state_dict["states"],
@@ -258,8 +258,23 @@ class SampleGroup:
                 tensor_dict["rewards"] = torch.FloatTensor(
                     state_dict["rewards"][1:]
                 )
+                answer_tokens = self.tokenizer.encode(
+                    self.samples[0].sample["answer"],
+                    add_special_tokens=False,
+                    return_tensors="pt"
+                ).squeeze(0)
+                critic_tensor_dict = {
+                    k: torch.cat((
+                        answer_tokens if k == "states"
+                        else torch.zeros((len(answer_tokens),), dtype=v.dtype),
+                        v
+                    ))
+                    for k, v in tensor_dict.items()
+                }
                 tensor_dicts.append(tensor_dict)
+                critic_tensor_dicts.append(critic_tensor_dict)
             all_tensor_dicts.append(tensor_dicts)
+            all_critic_tensor_dicts.append(critic_tensor_dicts)
             for k, v in sample.metrics.items():
                 metrics[k].extend(v)
         return all_tensor_dicts, metrics

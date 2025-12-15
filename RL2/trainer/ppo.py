@@ -60,21 +60,21 @@ class PPOTrainer(Trainer):
             initial=initial
         ):
 
-            tensor_dict, cu_seqs = await self.rollout(True, step)
+            tensor_dict, critic_tensor_dict, cu_seqs = await self.rollout(True, step)
 
             if self.config.actor.kl.coef > 0:
                 tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
             if self.config.adv.estimator == "gae":
-                tensor_dict = self.critic.compute_values(tensor_dict, step)
+                critic_tensor_dict = self.critic.compute_values(critic_tensor_dict, step)
             if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
                 tensor_dict = self.actor.compute_logps(tensor_dict, step)
 
             if dist.get_rank() == 0:
-                compute_advantages(self.config, tensor_dict, cu_seqs, step)
+                compute_advantages(self.config, tensor_dict, critic_tensor_dict, cu_seqs, step)
 
             self.actor.ppo_update(tensor_dict, step)
             if self.config.adv.estimator == "gae":
-                self.critic.ppo_update(tensor_dict, step)
+                self.critic.ppo_update(critic_tensor_dict, step)
             self.save_ckpt(
                 (self.actor, self.critic)
                 if self.config.adv.estimator == "gae"

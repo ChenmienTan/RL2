@@ -192,6 +192,7 @@ class Rollout:
             pendings, first_iter = set(), True
             filtered_groups, completed_groups = 0, 0
             all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
+            all_critic_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
             metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
             if train and config.partial_rollout:
@@ -218,7 +219,11 @@ class Rollout:
                         sample_group.print()
                         first_iter = False
                     await asyncio.to_thread(sample_group.save, step)
-                    all_tensor_dicts_delta, metrics_delta = (
+                    (
+                        all_tensor_dicts_delta,
+                        all_critic_tensor_dicts_delta,
+                        metrics_delta
+                    ) = (
                         sample_group.to_all_tensor_dicts_and_metrics()
                     )
                     for k, v in metrics_delta.items():
@@ -231,6 +236,7 @@ class Rollout:
                         filtered_groups += 1
                         continue
                     all_tensor_dicts.extend(all_tensor_dicts_delta)
+                    all_critic_tensor_dicts.extend(all_critic_tensor_dicts_delta)
 
             if train and config.partial_rollout:
                 await async_request(self.worker_urls, "pause_generation")
@@ -258,12 +264,16 @@ class Rollout:
             )
 
         if dist.get_rank() != 0:
-            return None, None
+            return None, None, None
 
         tensor_dicts: List[Dict[str, torch.Tensor]] = [
             td for tds in all_tensor_dicts for td in tds
         ]
         tensor_dict: Dict[str, torch.Tensor] = pack_tensor_dicts(tensor_dicts)
+        critic_tensor_dicts: List[Dict[str, torch.Tensor]] = [
+            td for tds in all_critic_tensor_dicts for td in tds
+        ]
+        critic_tensor_dict: Dict[str, torch.Tensor] = pack_tensor_dicts(critic_tensor_dicts)
         seqs = torch.LongTensor([
             len(tensor_dicts) for tensor_dicts in all_tensor_dicts
         ])
@@ -271,7 +281,7 @@ class Rollout:
             torch.cat((torch.LongTensor([0]), seqs)), dim=0
         )
         
-        return tensor_dict, cu_seqs
+        return tensor_dict, critic_tensor_dict, cu_seqs
     
     @torch.no_grad()
     async def update(
