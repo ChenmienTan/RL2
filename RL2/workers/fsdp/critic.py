@@ -47,11 +47,14 @@ class FSDPCritic(FSDPWorker):
             self.device_mesh["cp"].get_group(),
             cu_seqlens
         )
-        minibatch[f"{prefix}values"] = self.model(
+        values = self.model(
             input_ids=minibatch["states"],
             position_ids=minibatch["position_ids"],
             use_cache=False
-        ).logits.squeeze(-1) * minibatch["action_mask"]
+        ).logits.squeeze(-1)
+        if self.config.enable_cross_entropy_loss:
+            values = values.sigmoid()
+        minibatch[f"{prefix}values"] = values * minibatch["action_mask"]
         return gather_along_cp(
             minibatch,
             self.device_mesh["cp"].get_group(),

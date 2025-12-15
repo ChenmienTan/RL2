@@ -72,6 +72,7 @@ critic:
   clip: 0.5
   avg_level: ${actor.avg_level}
   offload_model: ${actor.offload_model}
+  enable_cross_entropy_loss: false
 
 adv:
   estimator: reinforce # `reinforce` or `gae`
