@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Callable, Tuple
 from omegaconf import OmegaConf, DictConfig
+import os
 import json
 import asyncio
 from enum import Enum
@@ -236,6 +237,7 @@ class SampleGroup:
     def save(self, step):
         
         data = [sample.to_json() for sample in self.samples]
+        os.makedirs(self.config.save_dir, exist_ok=True)
         with open(f"{self.config.save_dir}/step{step}.jsonl", "a") as f:
             f.write(json.dumps(data) + "\n")
 
