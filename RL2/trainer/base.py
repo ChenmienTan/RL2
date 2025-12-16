@@ -40,10 +40,11 @@ class Trainer:
                 wandb.log = lambda *args, **kwargs: None
 
     def _get_ckpt(self, step: int) -> Dict[str, Any]:
-        return {
-            "step": step,
-            "dataloader": self.train_dataloader.state_dict()
-        }
+
+        ckpt = {"step": step}
+        if dist.get_rank() == 0:
+            ckpt["dataloader"] = self.train_dataloader.state_dict()
+        return ckpt
 
     def load_ckpt(self, workers: Sequence[Worker]) -> int:
 
@@ -55,7 +56,8 @@ class Trainer:
 
         ckpt = self._get_ckpt(0)
         dcp.load(ckpt, checkpoint_id=f"{self.load_dir}/trainer")
-        self.train_dataloader.load_state_dict(ckpt["dataloader"])
+        if dist.get_rank() == 0:
+            self.train_dataloader.load_state_dict(ckpt["dataloader"])
         return ckpt["step"]
 
     def save_ckpt(self, workers: Sequence[Worker], step: int):
