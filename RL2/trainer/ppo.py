@@ -11,8 +11,7 @@ from RL2.workers import (
 )
 from RL2.utils.communication import (
     initialize_global_process_group,
-    open_session,
-    close_session
+    with_session
 )
 from RL2.utils.algorithms import compute_advantages
 
@@ -35,16 +34,14 @@ class PPOTrainer(Trainer):
                 self.critic.prepare_scheduler(
                     self.config.trainer.total_steps
                 )
-            
+    
+    @with_session
     async def train(self):
-
-        await open_session()
 
         self.rollout = await initialize_rollout(self.config.rollout)
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
-            await close_session()
             return
 
         initial = self.load_ckpt(
@@ -90,8 +87,6 @@ class PPOTrainer(Trainer):
             if self.config.adv.estimator == "gae"
             else (self.actor,)
         )
-
-        await close_session()
 
     @property
     def train_dataloader(self):

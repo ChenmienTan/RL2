@@ -1,9 +1,10 @@
-from typing import Any, Optional, List, Literal
+from typing import Any, Optional, List, Literal, Callable
 import os
 import json
 import socket
 import asyncio
 import aiohttp
+import functools
 from datetime import timedelta
 import torch
 import torch.distributed as dist
@@ -90,16 +91,23 @@ def gather_and_concat_list(
         else None
     )
 
-async def open_session():
+def with_session(func: Callable) -> Callable:
 
-    global SESSION
-    SESSION = aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=0),
-        timeout=aiohttp.ClientTimeout(total=None)
-    )
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
 
-async def close_session():
-    await SESSION.close()
+        global SESSION
+        SESSION = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=0),
+            timeout=aiohttp.ClientTimeout(total=None)
+        )
+
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            await SESSION.close()
+
+    return wrapper
 
 async def async_request(
     url: str | List[str],
