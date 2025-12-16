@@ -140,6 +140,7 @@ def add_env_response(
 async def base_generate(
     config: DictConfig,
     tokenizer: AutoTokenizer,
+    router_url: str,
     sample: Sample,
     env_step_fn: Callable
 ):
@@ -179,7 +180,7 @@ async def base_generate(
     while True:
         # TODO: set `max_tokens`
         response = await async_request(
-            config.router_url,
+            router_url,
             "generate",
             json={
                 "input_ids": sample.state_dict["states"],
@@ -217,12 +218,12 @@ class SampleGroup:
             for _ in range(config.responses_per_prompt)
         ]
 
-    async def generate(self, generate_fn: Callable) -> "SampleGroup":
+    async def generate(self, router_url: str, generate_fn: Callable) -> "SampleGroup":
         """
         This function packs the generation tasks of samples within a group into a single task so that they will return togather.
         """
         await asyncio.gather(*(
-            generate_fn(self.config, self.tokenizer, sample)
+            generate_fn(self.config, self.tokenizer, router_url, sample)
             for sample in self.samples
         ))
         return self

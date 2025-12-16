@@ -223,7 +223,7 @@ class Rollout:
                 pendings.add(
                     asyncio.create_task(
                         sample_group.generate(
-                            self.env.generate
+                            router_url, self.env.generate
                         )
                     )
                 )
@@ -233,7 +233,6 @@ class Rollout:
             async with Router(self.worker_urls) as router_url:
 
                 config = self.config.train if train else self.config.test
-                config.router_url = router_url
                 dataloader = self.train_dataloader if train else self.test_dataloader
                 groups_to_complete = config.prompts_per_rollout or len(dataloader)
                 

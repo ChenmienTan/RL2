@@ -301,14 +301,15 @@ def add_env_response(
 async def generate(
     config: DictConfig,
     tokenizer: AutoTokenizer,
+    router_url: str,
     sample: Sample
 ):
     sampling_params = OmegaConf.to_container(config.sampling_params)
 
     # prepare global variables
     global ROUTER_URL, SERVER_URL, MAX_TOKENS
-    if ROUTER_URL is None:
-        ROUTER_URL = config.router_url
+    if ROUTER_URL != router_url:
+        ROUTER_URL = router_url
     if SERVER_URL is None:
         response = await async_request(
             ROUTER_URL, "list_workers", "GET"
