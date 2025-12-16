@@ -3,6 +3,7 @@ from omegaconf import OmegaConf, DictConfig
 import os
 import time
 import asyncio
+import uvicorn
 import importlib
 import multiprocessing
 from collections import defaultdict
@@ -11,8 +12,12 @@ import torch.distributed as dist
 from torch.distributed.tensor import DTensor, Replicate
 from transformers import AutoTokenizer
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.entrypoints.http_server_engine import launch_server_process
-from sglang.srt.utils import MultiprocessingSerializer
+from sglang.srt.entrypoints.engine import _launch_subprocesses
+from sglang.srt.entrypoints.http_server import app, _GlobalState, set_global_state
+from sglang.srt.utils import (
+    set_uvicorn_logging_configs,
+    MultiprocessingSerializer
+)
 from sglang_router.launch_router import RouterArgs, launch_router
 from RL2.datasets import (
     pack_tensor_dicts,
@@ -24,6 +29,7 @@ from RL2.utils.communication import (
     get_host,
     get_available_port,
     GLOO_GROUP,
+    gather_and_concat_list,
     async_request
 )
 from RL2.utils.logging import (
@@ -50,19 +56,6 @@ class Rollout:
         self.config = config
         self._prepare_device_mesh()
         self._prepare_environment_variables()
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-
-            self._launch_server_process()
-            self.worker_urls = [
-                None for _ in range(self.device_mesh["dp"].size())
-            ] if self.device_mesh["dp"].get_local_rank() == 0 else None
-            dist.gather_object(
-                self.worker_url,
-                self.worker_urls,
-                group_dst=0,
-                group=self.device_mesh["dp"].get_group(),
-            )
         
         if dist.get_rank() == 0:
 
@@ -108,7 +101,10 @@ class Rollout:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
         monkey_patch_torch_reductions()
 
-    def _launch_server_process(self):
+    async def launch_server_process(self):
+
+        if not self.device_mesh["tp"].get_local_rank() == 0:
+            return
 
         # TODO: support cross-node server
         server_args = OmegaConf.to_container(self.config.server_args)
@@ -120,12 +116,55 @@ class Rollout:
             **server_args
         )
         self.worker_url = server_args.url()
-        self.server_process = launch_server_process(server_args)
+        
+        (
+            self.tokenizer_manager,
+            template_manager,
+            scheduler_info
+        ) = _launch_subprocesses(server_args=server_args)
+        set_global_state(
+            _GlobalState(
+                tokenizer_manager=self.tokenizer_manager,
+                template_manager=template_manager,
+                scheduler_info=scheduler_info
+            )
+        )
+
+        app.is_single_tokenizer_mode = True
+        app.server_args = server_args
+        app.warmup_thread_args = (server_args, None, None)
+        set_uvicorn_logging_configs()
+        config = uvicorn.Config(
+            app,
+            host=server_args.host,
+            port=server_args.port,
+            log_level=server_args.log_level_http or server_args.log_level,
+            timeout_keep_alive=5,
+            loop="uvloop",
+        )
+        server = uvicorn.Server(config)
+        server.install_signal_handlers = False
+        asyncio.create_task(server.serve())
+
+        await async_request(
+            self.worker_url, "headlth", "GET"
+        )
+        
+        self.worker_urls = gather_and_concat_list(
+            [self.worker_url],
+            self.device_mesh["dp"].get_group()
+        )
+
+        if dist.get_rank() == 0:
+            for worker_url in self.worker_urls:
+                await async_request(
+                    self.router_url,
+                    f"add_worker?url={worker_url}"
+                )
 
     def _launch_router_process(self):
 
         router_args = RouterArgs(
-            worker_urls=self.worker_urls,
             host=get_host(),
             port=get_available_port(),
             log_level="error"
@@ -245,7 +284,7 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
-        dist.barrier(group=GLOO_GROUP)
+        await asyncio.to_thred(dist.barrier, group=GLOO_GROUP)
 
         if not train:
             return

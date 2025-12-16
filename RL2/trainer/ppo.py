@@ -35,10 +35,10 @@ class PPOTrainer(Trainer):
                 self.critic.prepare_scheduler(
                     self.config.trainer.total_steps
                 )
-
-        self.rollout = initialize_rollout(config.rollout)
             
     async def train(self):
+
+        self.rollout = await initialize_rollout(self.config.rollout)
 
         await open_session()
 
