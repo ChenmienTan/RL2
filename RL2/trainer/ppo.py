@@ -38,9 +38,9 @@ class PPOTrainer(Trainer):
             
     async def train(self):
 
-        self.rollout = await initialize_rollout(self.config.rollout)
-
         await open_session()
+
+        self.rollout = await initialize_rollout(self.config.rollout)
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
