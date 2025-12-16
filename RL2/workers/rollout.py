@@ -138,13 +138,13 @@ class Rollout:
         self.worker_url = server_args.url()
         
         (
-            self.tokenizer_manager,
+            tokenizer_manager,
             template_manager,
             scheduler_info
         ) = _launch_subprocesses(server_args=server_args)
         set_global_state(
             _GlobalState(
-                tokenizer_manager=self.tokenizer_manager,
+                tokenizer_manager=tokenizer_manager,
                 template_manager=template_manager,
                 scheduler_info=scheduler_info
             )
@@ -187,7 +187,7 @@ class Rollout:
             target=launch_router, args=(router_args,)
         )
         self.router_process.start()
-        await async_request(router_url, "health", "GET")
+        await async_request(router_url, "health", "GET", 10)
 
         await asyncio.gather(*[
             async_request(
