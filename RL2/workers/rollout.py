@@ -1,7 +1,6 @@
 from typing import Optional, Union, Dict, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
-import time
 import asyncio
 import uvicorn
 import importlib
@@ -47,6 +46,40 @@ try:
     from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
 except ImportError:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
+
+
+class Router:
+
+    def __init__(self, worker_urls):
+
+        self.worker_urls = worker_urls
+
+        router_args = RouterArgs(
+            host=get_host(),
+            port=get_available_port(),
+            log_level="error"
+        )
+        self.url = f"http://{router_args.host}:{router_args.port}"
+        self.process = multiprocessing.Process(
+            target=launch_router, args=(router_args,)
+        )
+        self.process.start()
+
+    async def __aenter__(self):
+        
+        await async_request(self.url, "health", "GET", 10)
+        await asyncio.gather(*[
+            async_request(self.url, f"add_worker?url={worker_url}")
+            for worker_url in self.worker_urls
+        ])
+        return self.url
+
+    async def __aexit__(self, type, val, tb):
+        
+        self.process.terminate()
+        self.process.join(timeout=3)
+        if self.process.is_alive():
+            self.process.kill()
 
 
 class Rollout:
@@ -175,30 +208,6 @@ class Rollout:
             self.device_mesh["dp"].get_group()
         )
 
-    async def _launch_router_process(self):
-
-        router_args = RouterArgs(
-            host=get_host(),
-            port=get_available_port(),
-            log_level="error"
-        )
-        router_url = f"http://{router_args.host}:{router_args.port}"
-        self.router_process = multiprocessing.Process(
-            target=launch_router, args=(router_args,)
-        )
-        self.router_process.start()
-        await async_request(router_url, "health", "GET", 10)
-
-        await asyncio.gather(*[
-            async_request(
-                router_url,
-                f"add_worker?url={worker_url}"
-            )
-            for worker_url in self.worker_urls
-        ])
-
-        return router_url
-
     @time_logger("rollout")
     async def __call__(
         self,
@@ -221,67 +230,65 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
-            router_url = await self._launch_router_process()
+            async with Router(self.worker_urls) as router_url:
 
-            config = self.config.train if train else self.config.test
-            config.router_url = router_url
-            dataloader = self.train_dataloader if train else self.test_dataloader
-            groups_to_complete = config.prompts_per_rollout or len(dataloader)
-            
-            tbar = progress_bar(
-                total=groups_to_complete, desc="Rollout"
-            )
-
-            pendings, first_iter = set(), True
-            filtered_groups, completed_groups = 0, 0
-            all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
-            metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
-
-            if train and config.partial_rollout:
-                _schedule_tasks(self.sample_buffer)
-
-            while completed_groups < groups_to_complete:
-
-                if first_iter or (train and config.partial_rollout):
-                    sample_groups = dataloader(
-                        groups_to_complete - len(pendings)
-                    )
-                    _schedule_tasks(sample_groups)
-
-                done, pendings = await asyncio.wait(
-                    pendings, return_when=asyncio.FIRST_COMPLETED
+                config = self.config.train if train else self.config.test
+                config.router_url = router_url
+                dataloader = self.train_dataloader if train else self.test_dataloader
+                groups_to_complete = config.prompts_per_rollout or len(dataloader)
+                
+                tbar = progress_bar(
+                    total=groups_to_complete, desc="Rollout"
                 )
 
-                for task in done:
-                    if completed_groups < groups_to_complete:
-                        tbar.update()
-                    completed_groups += 1
-                    sample_group = task.result()
-                    if first_iter:
-                        sample_group.print()
-                        first_iter = False
-                    await asyncio.to_thread(sample_group.save, step)
-                    all_tensor_dicts_delta, metrics_delta = (
-                        sample_group.to_all_tensor_dicts_and_metrics()
+                pendings, first_iter = set(), True
+                filtered_groups, completed_groups = 0, 0
+                all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
+                metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
+
+                if train and config.partial_rollout:
+                    _schedule_tasks(self.sample_buffer)
+
+                while completed_groups < groups_to_complete:
+
+                    if first_iter or (train and config.partial_rollout):
+                        sample_groups = dataloader(
+                            groups_to_complete - len(pendings)
+                        )
+                        _schedule_tasks(sample_groups)
+
+                    done, pendings = await asyncio.wait(
+                        pendings, return_when=asyncio.FIRST_COMPLETED
                     )
-                    for k, v in metrics_delta.items():
-                        metrics[k].extend(v)
-                    if (
-                        train and config.dynamic_filtering and
-                        len(metrics_delta["rewards"]) > 1 and
-                        torch.tensor(metrics_delta["rewards"]).std() == 0
-                    ):
-                        filtered_groups += 1
-                        continue
-                    all_tensor_dicts.extend(all_tensor_dicts_delta)
 
-            if train and config.partial_rollout:
-                await async_request(self.worker_urls, "pause_generation")
-                done, _ = await asyncio.wait(pendings)
-                self.sample_buffer = [task.result() for task in done]
-                await async_request(self.worker_urls, "continue_generation")
+                    for task in done:
+                        if completed_groups < groups_to_complete:
+                            tbar.update()
+                        completed_groups += 1
+                        sample_group = task.result()
+                        if first_iter:
+                            sample_group.print()
+                            first_iter = False
+                        await asyncio.to_thread(sample_group.save, step)
+                        all_tensor_dicts_delta, metrics_delta = (
+                            sample_group.to_all_tensor_dicts_and_metrics()
+                        )
+                        for k, v in metrics_delta.items():
+                            metrics[k].extend(v)
+                        if (
+                            train and config.dynamic_filtering and
+                            len(metrics_delta["rewards"]) > 1 and
+                            torch.tensor(metrics_delta["rewards"]).std() == 0
+                        ):
+                            filtered_groups += 1
+                            continue
+                        all_tensor_dicts.extend(all_tensor_dicts_delta)
 
-            self.router_process.terminate()
+                if train and config.partial_rollout:
+                    await async_request(self.worker_urls, "pause_generation")
+                    done, _ = await asyncio.wait(pendings)
+                    self.sample_buffer = [task.result() for task in done]
+                    await async_request(self.worker_urls, "continue_generation")
 
             metrics["dynamic_filtering_ratio"].append(
                 filtered_groups / completed_groups
