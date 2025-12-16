@@ -45,7 +45,6 @@ class PPOTrainer(Trainer):
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
             await close_session()
-            self.rollout.close()
             return
 
         initial = self.load_ckpt(
@@ -93,7 +92,6 @@ class PPOTrainer(Trainer):
         )
 
         await close_session()
-        self.rollout.close()
 
     @property
     def train_dataloader(self):

@@ -62,7 +62,6 @@ class Rollout:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            self._launch_router_process()
             self.train_dataloader = self._prepare_dataloader(True)
             self.test_dataloader = self._prepare_dataloader(False)
 
@@ -100,6 +99,27 @@ class Rollout:
         )
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
         monkey_patch_torch_reductions()
+
+    def _prepare_dataloader(self, train: bool):
+        
+        dataset = RLDataset(
+            self.config.train if train else self.config.test,
+            self.tokenizer
+        )
+        return StatefulCycleDataLoader(
+            dataset=dataset,
+            batch_size=1,
+            shuffle=True,
+            collate_fn=lambda batch: batch[0]
+        )
+
+    def _prepare_environment(self):
+
+        spec = importlib.util.spec_from_file_location(
+            "custom_module", self.config.env_path
+        )
+        self.env = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.env)
 
     async def launch_server_process(self):
 
@@ -155,48 +175,29 @@ class Rollout:
             self.device_mesh["dp"].get_group()
         )
 
-        if dist.get_rank() == 0:
-            for worker_url in self.worker_urls:
-                await async_request(
-                    self.config.train.router_url,
-                    f"add_worker?url={worker_url}"
-                )
-
-    def _launch_router_process(self):
+    async def _launch_router_process(self):
 
         router_args = RouterArgs(
             host=get_host(),
             port=get_available_port(),
             log_level="error"
         )
-        self.config.train.router_url = self.config.test.router_url = f"http://{router_args.host}:{router_args.port}"
+        router_url = f"http://{router_args.host}:{router_args.port}"
         self.router_process = multiprocessing.Process(
             target=launch_router, args=(router_args,)
         )
         self.router_process.start()
-        time.sleep(3)
-        assert self.router_process.is_alive()
+        await async_request(router_url, "health", "GET")
 
-    def _prepare_dataloader(self, train: bool):
-        
-        dataset = RLDataset(
-            self.config.train if train else self.config.test,
-            self.tokenizer
-        )
-        return StatefulCycleDataLoader(
-            dataset=dataset,
-            batch_size=1,
-            shuffle=True,
-            collate_fn=lambda batch: batch[0]
-        )
+        await asyncio.gather(*[
+            async_request(
+                router_url,
+                f"add_worker?url={worker_url}"
+            )
+            for worker_url in self.worker_urls
+        ])
 
-    def _prepare_environment(self):
-
-        spec = importlib.util.spec_from_file_location(
-            "custom_module", self.config.env_path
-        )
-        self.env = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.env)
+        return router_url
 
     @time_logger("rollout")
     async def __call__(
@@ -220,7 +221,10 @@ class Rollout:
 
         if dist.get_rank() == 0:
 
+            router_url = await self._launch_router_process()
+
             config = self.config.train if train else self.config.test
+            config.router_url = router_url
             dataloader = self.train_dataloader if train else self.test_dataloader
             groups_to_complete = config.prompts_per_rollout or len(dataloader)
             
@@ -276,6 +280,8 @@ class Rollout:
                 done, _ = await asyncio.wait(pendings)
                 self.sample_buffer = [task.result() for task in done]
                 await async_request(self.worker_urls, "continue_generation")
+
+            self.router_process.terminate()
 
             metrics["dynamic_filtering_ratio"].append(
                 filtered_groups / completed_groups
@@ -413,8 +419,3 @@ class Rollout:
                 json={"tags": ["kv_cache"]}
             )
         dist.barrier(group=GLOO_GROUP)
-
-    def close(self):
-
-        if dist.get_rank() == 0:
-            self.router_process.terminate()
