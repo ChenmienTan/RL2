@@ -418,6 +418,3 @@ class Rollout:
 
         if dist.get_rank() == 0:
             self.router_process.terminate()
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.server_process.terminate()
