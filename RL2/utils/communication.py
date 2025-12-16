@@ -105,6 +105,8 @@ async def async_request(
     url: str | List[str],
     endpoint: str,
     method: Literal["POST", "GET"] = "POST",
+    max_trials: int = 3,
+    retry_delay: int = 1,
     **kwargs
 ):
     if isinstance(url, list):
@@ -113,15 +115,25 @@ async def async_request(
             for u in url
         ))
 
-    match method:
-        case "POST":
-            req_ctx = SESSION.post(f"{url}/{endpoint}", **kwargs)
-        case "GET":
-            req_ctx = SESSION.get(f"{url}/{endpoint}", **kwargs)
+    for trial in range(max_trials):
 
-    async with req_ctx as response:
-        response.raise_for_status()
         try:
-            return await response.json(content_type=None)
-        except json.decoder.JSONDecodeError:
-            return await response.text()
+
+            match method:
+                case "POST":
+                    req_ctx = SESSION.post(f"{url}/{endpoint}", **kwargs)
+                case "GET":
+                    req_ctx = SESSION.get(f"{url}/{endpoint}", **kwargs)
+
+            async with req_ctx as response:
+                response.raise_for_status()
+                try:
+                    return await response.json(content_type=None)
+                except json.decoder.JSONDecodeError:
+                    return await response.text()
+        
+        except:
+            
+            if trial == max_trials - 1:
+                raise
+            await asyncio.sleep(retry_delay)

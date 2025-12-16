@@ -147,7 +147,7 @@ class Rollout:
         asyncio.create_task(server.serve())
 
         await async_request(
-            self.worker_url, "headlth", "GET"
+            self.worker_url, "headlth", "GET", 10 * 60
         )
         
         self.worker_urls = gather_and_concat_list(
