@@ -147,7 +147,7 @@ class Rollout:
         asyncio.create_task(server.serve())
 
         await async_request(
-            self.worker_url, "headlth", "GET", 10 * 60
+            self.worker_url, "health", "GET", 10 * 60
         )
         
         self.worker_urls = gather_and_concat_list(
@@ -158,7 +158,7 @@ class Rollout:
         if dist.get_rank() == 0:
             for worker_url in self.worker_urls:
                 await async_request(
-                    self.router_url,
+                    self.config.train.router_url,
                     f"add_worker?url={worker_url}"
                 )
 
@@ -284,7 +284,7 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
-        await asyncio.to_thred(dist.barrier, group=GLOO_GROUP)
+        await asyncio.to_thread(dist.barrier, group=GLOO_GROUP)
 
         if not train:
             return
