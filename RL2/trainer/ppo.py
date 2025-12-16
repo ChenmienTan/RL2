@@ -95,6 +95,10 @@ class PPOTrainer(Trainer):
         await close_session()
         self.rollout.close()
 
+    @property
+    def train_dataloader(self):
+        return self.rollout.train_dataloader
+
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)
 def main(config: DictConfig):
