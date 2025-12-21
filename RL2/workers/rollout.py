@@ -49,30 +49,34 @@ except ImportError:
 
 
 class Router:
-
+    """
+    SGLang router is wrapped as a context for two purpose:
+        - ensure the router only exists during rollout, avioding health 
+        checks when server is offloaded
+        - terminate the router process when errors occur so that the 
+        training task can exit properly
+    """
     def __init__(self, worker_urls):
-
         self.worker_urls = worker_urls
+
+    async def __aenter__(self):
 
         router_args = RouterArgs(
             host=get_host(),
             port=get_available_port(),
             log_level="error"
         )
-        self.url = f"http://{router_args.host}:{router_args.port}"
+        url = f"http://{router_args.host}:{router_args.port}"
         self.process = multiprocessing.Process(
             target=launch_router, args=(router_args,)
         )
         self.process.start()
-
-    async def __aenter__(self):
-        
-        await async_request(self.url, "health", "GET", 10)
+        await async_request(url, "health", "GET", 10)
         await asyncio.gather(*[
-            async_request(self.url, f"add_worker?url={worker_url}")
+            async_request(url, f"add_worker?url={worker_url}")
             for worker_url in self.worker_urls
         ])
-        return self.url
+        return url
 
     async def __aexit__(self, type, val, tb):
         
@@ -155,7 +159,10 @@ class Rollout:
         spec.loader.exec_module(self.env)
 
     async def launch_server_process(self):
-
+        """
+        Make SGLang server a coroutine rather than a subprocess so that 
+        the task can exit properly when training or inference error occurs.
+        """
         if not self.device_mesh["tp"].get_local_rank() == 0:
             return
 
@@ -201,7 +208,7 @@ class Rollout:
 
         await async_request(
             self.worker_url, "health", "GET", 10 * 60
-        )
+        ) # up to 10 minutes to load the model
         
         self.worker_urls = gather_and_concat_list(
             [self.worker_url],
@@ -296,6 +303,7 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
+        # Use GLOO group to avoid affecting SGLang server
         await asyncio.to_thread(dist.barrier, group=GLOO_GROUP)
 
         if not train:

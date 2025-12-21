@@ -23,7 +23,7 @@ def get_available_port() -> int:
 
 def initialize_global_process_group(
     create_gloo_group: bool = False,
-    timeout_second: int =36000
+    timeout_second: int = 36000
 ):
     
     dist.init_process_group(

@@ -34,7 +34,7 @@ def get_tensor_dict(
     if rm:
         tensor_dict["action_mask"] = torch.LongTensor(
             (len(states) - 1) * [0] + [1]
-        ) # rewards of non-terminal tokens are all zeros
+        ) # rewards of non-terminal tokens are zeros
     else:
         tensor_dict["actions"] = torch.LongTensor(actions)
         tensor_dict["action_mask"] = torch.LongTensor(action_mask)
@@ -93,7 +93,7 @@ class BaseDataset(Dataset):
         )
 
     def _tokenize_messages(
-        self, messages: List[Dict[str, str]], rm: bool = False
+        self, messages: List[Dict[str, Any]], rm: bool = False
     ) -> List[Dict[str, torch.Tensor]]:
 
         prev_text, states, actions, action_mask = "", [], [], []
@@ -158,7 +158,7 @@ class BaseDataset(Dataset):
 
 
 def get_dataloader(
-    dataset: BaseDataset, batch_size: Optional[int] = None
+    dataset: BaseDataset, batch_size: int
 ) -> StatefulDataLoader:
     return StatefulDataLoader(
         dataset=dataset,
