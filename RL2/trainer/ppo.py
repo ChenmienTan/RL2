@@ -9,6 +9,7 @@ from RL2.workers import (
     initialize_critic,
     initialize_rollout
 )
+from RL2.workers.rollout import shutdown_processes_when_exit
 from RL2.utils.communication import (
     initialize_global_process_group,
     with_session
@@ -34,11 +35,12 @@ class PPOTrainer(Trainer):
                 self.critic.prepare_scheduler(
                     self.config.trainer.total_steps
                 )
-    
+
+        self.rollout = initialize_rollout(self.config.rollout)
+
+    @shutdown_processes_when_exit
     @with_session
     async def train(self):
-
-        self.rollout = await initialize_rollout(self.config.rollout)
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)

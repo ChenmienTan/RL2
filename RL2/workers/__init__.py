@@ -1,4 +1,3 @@
-from hydra.core.hydra_config import HydraConfig
 from .base import Worker
 
 def initialize_actor(config, train):
@@ -31,9 +30,7 @@ def initialize_critic(config):
     else:
         raise NotImplementedError
 
-async def initialize_rollout(config):
+def initialize_rollout(config):
 
     from .rollout import Rollout
-    rollout = Rollout(config)
-    await rollout.launch_server_process()
-    return rollout
+    return Rollout(config)
