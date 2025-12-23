@@ -23,7 +23,7 @@ from RL2.datasets import (
 from RL2.utils.communication import (
     get_host,
     get_available_port,
-    GLOO_GROUP,
+    get_gloo_group,
     gather_and_concat_list,
     sync_request,
     async_request
@@ -269,7 +269,7 @@ class Rollout:
             gather_and_log(metrics, step)
 
         # Use GLOO group to avoid affecting SGLang server
-        await asyncio.to_thread(dist.barrier, group=GLOO_GROUP)
+        await asyncio.to_thread(dist.barrier, group=get_gloo_group())
 
         if not train:
             return
@@ -303,7 +303,7 @@ class Rollout:
     ):
 
         torch.cuda.empty_cache()
-        dist.barrier(group=GLOO_GROUP)
+        dist.barrier(group=get_gloo_group())
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
             sync_request(
@@ -397,4 +397,4 @@ class Rollout:
                 "resume_memory_occupation",
                 json={"tags": ["kv_cache"]}
             )
-        dist.barrier(group=GLOO_GROUP)
+        dist.barrier(group=get_gloo_group())

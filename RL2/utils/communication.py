@@ -45,6 +45,9 @@ def initialize_global_process_group(
             backend="gloo"
         )
 
+def get_gloo_group():
+    return GLOO_GROUP
+
 def _unwrap_process_group(
     process_group: dist.ProcessGroup
 ) -> dist.ProcessGroup:
