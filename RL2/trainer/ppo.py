@@ -80,7 +80,7 @@ class PPOTrainer(Trainer):
                 step
             )
 
-            await self.actor.update_rollout(self.rollout, step)
+            self.actor.update_rollout(self.rollout, step)
             if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
                 await self.rollout(False, step)
 

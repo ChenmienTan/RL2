@@ -220,11 +220,11 @@ class MegatronActor(MegatronWorker):
             self._offload_model_to_cpu()
 
     @time_logger("update_rollout")
-    async def update_rollout(self, rollout, step):
+    def update_rollout(self, rollout, step):
 
         self._load_model_to_gpu()
         named_tensor_generator = self.bridge.export_hf_weights(
             self.model, cpu=True
         )
-        await rollout.update(named_tensor_generator)
+        rollout.update(named_tensor_generator)
         self._offload_model_to_cpu()

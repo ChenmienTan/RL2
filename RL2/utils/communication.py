@@ -1,9 +1,11 @@
 from typing import Any, Optional, List, Literal, Callable
 import os
+import time
 import json
 import socket
 import asyncio
 import aiohttp
+import requests
 import functools
 from datetime import timedelta
 import torch
@@ -90,6 +92,40 @@ def gather_and_concat_list(
         if dist.get_rank(process_group) == 0
         else None
     )
+
+def sync_request(
+    url: str,
+    endpoint: str,
+    method: Literal["POST", "GET"] = "POST",
+    max_trials: int = 3,
+    retry_delay: int = 1,
+    **kwargs
+):
+
+    with requests.Session() as session:
+
+        for trial in range(max_trials):
+
+            try:
+
+                match method:
+                    case "POST":
+                        response = session.post(f"{url}/{endpoint}", **kwargs)
+                    case "GET":
+                        response = session.get(f"{url}/{endpoint}", **kwargs)
+
+                response.raise_for_status()
+                try:
+                    return response.json()
+                except json.decoder.JSONDecodeError:
+                    return response.text()
+
+            except:
+
+                if trial == max_trials - 1:
+                    raise
+                time.sleep(retry_delay)
+
 
 def with_session(func: Callable) -> Callable:
 

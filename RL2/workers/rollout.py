@@ -1,9 +1,7 @@
 from typing import Optional, Union, Dict, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
-import time
 import asyncio
-import requests
 import importlib
 import functools
 import multiprocessing
@@ -27,6 +25,7 @@ from RL2.utils.communication import (
     get_available_port,
     GLOO_GROUP,
     gather_and_concat_list,
+    sync_request,
     async_request
 )
 from RL2.utils.logging import (
@@ -158,7 +157,7 @@ class Rollout:
             self.device_mesh["dp"].get_group()
         )
 
-    def _launch_router_process(self, max_trials: int = 10, retry_delay: int = 1):
+    def _launch_router_process(self):
 
         router_args = RouterArgs(
             worker_urls=self.worker_urls,
@@ -173,16 +172,7 @@ class Rollout:
         )
         router_process.start()
         PROCESSES.append(router_process)
-        with requests.Session() as session:
-            for trial in range(max_trials):
-                try:
-                    response = session.get(f"{self.router_url}/health")
-                    response.raise_for_status()
-                    return
-                except:
-                    if trial == max_trials - 1:
-                        raise
-                    time.sleep(retry_delay)
+        sync_request(self.router_url, "health", "GET", 10)
 
     def _prepare_environment(self):
 
@@ -308,7 +298,7 @@ class Rollout:
         return tensor_dict, cu_seqs
     
     @torch.no_grad()
-    async def update(
+    def update(
         self, named_tensor_generator: Generator[Tuple[str, torch.Tensor], None, None]
     ):
 
@@ -316,13 +306,13 @@ class Rollout:
         dist.barrier(group=GLOO_GROUP)
         # or resume_memory_occupation() may OOM
         if self.device_mesh["tp"].get_local_rank() == 0:
-            await async_request(
+            sync_request(
                 self.worker_url,
                 "resume_memory_occupation",
                 json={"tags": ["weights"]}
             )
 
-        async def _update_tensor_bucket(
+        def _update_tensor_bucket(
             dtype_to_named_tensors: Dict[torch.dtype, List[Tuple[str, torch.Tensor]]]
         ):
 
@@ -365,7 +355,7 @@ class Rollout:
                     # ]
                     # HTTP server only sends meta data. Actual weights will be directly 
                     # copied from GPUs
-                    await async_request(
+                    sync_request(
                         self.worker_url,
                         "update_weights_from_tensor",
                         json={
@@ -382,7 +372,7 @@ class Rollout:
 
             if bucket_size > 0 and bucket_size + param_size > (self.config.bucket_size << 20):
 
-                await _update_tensor_bucket(dtype_to_named_tensors)
+                _update_tensor_bucket(dtype_to_named_tensors)
                 dtype_to_named_tensors = defaultdict(list)
                 bucket_size = 0
 
@@ -399,10 +389,10 @@ class Rollout:
             dtype_to_named_tensors[tensor.dtype].append((name, tensor))
             bucket_size += param_size
 
-        await _update_tensor_bucket(dtype_to_named_tensors)
+        _update_tensor_bucket(dtype_to_named_tensors)
 
         if self.device_mesh["tp"].get_local_rank() == 0:
-            await async_request(
+            sync_request(
                 self.worker_url,
                 "resume_memory_occupation",
                 json={"tags": ["kv_cache"]}

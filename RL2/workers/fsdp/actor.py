@@ -223,10 +223,10 @@ class FSDPActor(FSDPWorker):
             self._load_model_to_device("cpu")
 
     @time_logger("update_rollout")
-    async def update_rollout(self, rollout, step):
+    def update_rollout(self, rollout, step):
 
         state_dict = self._get_model_state_dict()
-        await rollout.update(
+        rollout.update(
             progress_bar(
                 state_dict.items(),
                 desc="Update rollout"
