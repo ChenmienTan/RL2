@@ -244,6 +244,8 @@ class SampleGroup:
 
     def to_all_tensor_dicts_and_metrics(self) -> Tuple[List[List[Dict[str, torch.Tensor]]], Dict[str, List[float | int | bool]]]:
         
+        all_rewards = [sample.metrics["rewards"][0] for sample in self.samples]
+        baseline = torch.mean(all_rewards).item()
         all_tensor_dicts, all_critic_tensor_dicts, metrics = [], [], defaultdict(list)
         for sample in self.samples:
             tensor_dicts, critic_tensor_dicts = [], []
@@ -259,22 +261,24 @@ class SampleGroup:
                 tensor_dict["rewards"] = torch.FloatTensor(
                     state_dict["rewards"][1:]
                 )
-                if self.config.enable_privileged_critic:
-                    answer_tokens = self.tokenizer.encode(
-                        self.samples[0].sample["answer"],
-                        add_special_tokens=False,
-                        return_tensors="pt"
-                    ).squeeze(0)
-                    critic_tensor_dict = {
-                        k: torch.cat((
-                            answer_tokens if k == "states"
-                            else torch.zeros((len(answer_tokens),), dtype=v.dtype),
-                            v
-                        ))
-                        for k, v in tensor_dict.items()
-                    }
-                else:
-                    critic_tensor_dict = tensor_dict
+                privileged_tokens = []
+                if self.config.privileged_info.baseline:
+                    privileged_tokens.extend(
+                        self.tokenizer.encode(f"Baseline: {round(baseline, 2)}")
+                    )
+                if self.config.privileged_info.reward:
+                    reward = sample.metrics["rewards"][0]
+                    privileged_tokens.extend(
+                        self.tokenizer.encode(f"Reward: {round(reward, 2)}")
+                    )
+                critic_tensor_dict = {
+                    k: torch.cat((
+                        torch.LongTensor(privileged_tokens) if k == "states"
+                        else torch.zeros((len(privileged_tokens),), dtype=v.dtype),
+                        v
+                    ))
+                    for k, v in tensor_dict.items()
+                }
                 tensor_dicts.append(tensor_dict)
                 critic_tensor_dicts.append(critic_tensor_dict)
             all_tensor_dicts.append(tensor_dicts)

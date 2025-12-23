@@ -44,8 +44,10 @@ rollout:
       stop: null
     dynamic_filtering: true
     partial_rollout: false
-    enable_privileged_critic: false
     save_dir: ${trainer.save_dir}/train
+    privileged_info:
+      baseline: false
+      reward: false
   test:
     path: null
     prompt_key: ${rollout.train.prompt_key}
