@@ -121,14 +121,13 @@ def sync_request(
                 try:
                     return response.json()
                 except json.decoder.JSONDecodeError:
-                    return response.text()
+                    return response.text
 
             except:
 
                 if trial == max_trials - 1:
                     raise
                 time.sleep(retry_delay)
-
 
 def with_session(func: Callable) -> Callable:
 
