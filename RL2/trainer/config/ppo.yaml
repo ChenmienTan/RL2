@@ -46,7 +46,6 @@ rollout:
     partial_rollout: false
     enable_privileged_critic: false
     save_dir: ${trainer.save_dir}/train
-    router_url: null # placeholder
   test:
     path: null
     prompt_key: ${rollout.train.prompt_key}
@@ -59,7 +58,6 @@ rollout:
       max_new_tokens: ${rollout.train.sampling_params.max_new_tokens}
       stop: ${rollout.train.sampling_params.stop}
     save_dir: ${trainer.save_dir}/test
-    router_url: null
   env_path: null
   bucket_size: 512
 

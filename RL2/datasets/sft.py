@@ -5,7 +5,7 @@ from RL2.datasets import BaseDataset, pack_tensor_dicts
 
 class SFTDataset(BaseDataset):
     
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> List[Dict[str, torch.Tensor]]:
 
         sample = self.dataset[idx]
         if self.config.apply_chat_template:

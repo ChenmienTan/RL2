@@ -31,7 +31,9 @@ def initialize_critic(config):
     else:
         raise NotImplementedError
 
-def initialize_rollout(config):
+async def initialize_rollout(config):
 
     from .rollout import Rollout
-    return Rollout(config)
+    rollout = Rollout(config)
+    await rollout.launch_server_process()
+    return rollout

@@ -11,8 +11,7 @@ from RL2.workers import (
 )
 from RL2.utils.communication import (
     initialize_global_process_group,
-    open_session,
-    close_session
+    with_session
 )
 from RL2.utils.algorithms import compute_advantages
 
@@ -35,17 +34,14 @@ class PPOTrainer(Trainer):
                 self.critic.prepare_scheduler(
                     self.config.trainer.total_steps
                 )
-
-        self.rollout = initialize_rollout(config.rollout)
-            
+    
+    @with_session
     async def train(self):
 
-        await open_session()
+        self.rollout = await initialize_rollout(self.config.rollout)
 
         if self.config.trainer.eval_only:
             await self.rollout(False, 0)
-            await close_session()
-            self.rollout.close()
             return
 
         initial = self.load_ckpt(
@@ -92,8 +88,9 @@ class PPOTrainer(Trainer):
             else (self.actor,)
         )
 
-        await close_session()
-        self.rollout.close()
+    @property
+    def train_dataloader(self):
+        return self.rollout.train_dataloader
 
 
 @hydra.main(config_path="config", config_name="ppo", version_base=None)

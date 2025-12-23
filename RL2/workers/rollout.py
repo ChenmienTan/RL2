@@ -1,8 +1,8 @@
 from typing import Optional, Union, Dict, List, Tuple, Generator, Sequence
 from omegaconf import OmegaConf, DictConfig
 import os
-import time
 import asyncio
+import uvicorn
 import importlib
 import multiprocessing
 from collections import defaultdict
@@ -11,8 +11,12 @@ import torch.distributed as dist
 from torch.distributed.tensor import DTensor, Replicate
 from transformers import AutoTokenizer
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.entrypoints.http_server_engine import launch_server_process
-from sglang.srt.utils import MultiprocessingSerializer
+from sglang.srt.entrypoints.engine import _launch_subprocesses
+from sglang.srt.entrypoints.http_server import app, _GlobalState, set_global_state
+from sglang.srt.utils import (
+    set_uvicorn_logging_configs,
+    MultiprocessingSerializer
+)
 from sglang_router.launch_router import RouterArgs, launch_router
 from RL2.datasets import (
     pack_tensor_dicts,
@@ -24,6 +28,7 @@ from RL2.utils.communication import (
     get_host,
     get_available_port,
     GLOO_GROUP,
+    gather_and_concat_list,
     async_request
 )
 from RL2.utils.logging import (
@@ -43,6 +48,44 @@ except ImportError:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
 
 
+class Router:
+    """
+    SGLang router is wrapped as a context for two purpose:
+        - ensure the router only exists during rollout, avioding health 
+        checks when server is offloaded
+        - terminate the router process when errors occur so that the 
+        training task can exit properly
+    """
+    def __init__(self, worker_urls):
+        self.worker_urls = worker_urls
+
+    async def __aenter__(self):
+
+        router_args = RouterArgs(
+            host=get_host(),
+            port=get_available_port(),
+            log_level="error"
+        )
+        url = f"http://{router_args.host}:{router_args.port}"
+        self.process = multiprocessing.Process(
+            target=launch_router, args=(router_args,)
+        )
+        self.process.start()
+        await async_request(url, "health", "GET", 10)
+        await asyncio.gather(*[
+            async_request(url, f"add_worker?url={worker_url}")
+            for worker_url in self.worker_urls
+        ])
+        return url
+
+    async def __aexit__(self, type, val, tb):
+        
+        self.process.terminate()
+        self.process.join(timeout=3)
+        if self.process.is_alive():
+            self.process.kill()
+
+
 class Rollout:
 
     def __init__(self, config: DictConfig):
@@ -50,26 +93,12 @@ class Rollout:
         self.config = config
         self._prepare_device_mesh()
         self._prepare_environment_variables()
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-
-            self._launch_server_process()
-            self.worker_urls = [
-                None for _ in range(self.device_mesh["dp"].size())
-            ] if self.device_mesh["dp"].get_local_rank() == 0 else None
-            dist.gather_object(
-                self.worker_url,
-                self.worker_urls,
-                group_dst=0,
-                group=self.device_mesh["dp"].get_group(),
-            )
         
         if dist.get_rank() == 0:
 
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            self._launch_router_process()
             self.train_dataloader = self._prepare_dataloader(True)
             self.test_dataloader = self._prepare_dataloader(False)
 
@@ -108,36 +137,6 @@ class Rollout:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
         monkey_patch_torch_reductions()
 
-    def _launch_server_process(self):
-
-        # TODO: support cross-node server
-        server_args = OmegaConf.to_container(self.config.server_args)
-        server_args = ServerArgs(
-            enable_memory_saver=True,
-            host=get_host(),
-            port=get_available_port(),
-            log_level="error",
-            **server_args
-        )
-        self.worker_url = server_args.url()
-        self.server_process = launch_server_process(server_args)
-
-    def _launch_router_process(self):
-
-        router_args = RouterArgs(
-            worker_urls=self.worker_urls,
-            host=get_host(),
-            port=get_available_port(),
-            log_level="error"
-        )
-        self.config.train.router_url = self.config.test.router_url = f"http://{router_args.host}:{router_args.port}"
-        self.router_process = multiprocessing.Process(
-            target=launch_router, args=(router_args,)
-        )
-        self.router_process.start()
-        time.sleep(3)
-        assert self.router_process.is_alive()
-
     def _prepare_dataloader(self, train: bool):
         
         dataset = RLDataset(
@@ -159,6 +158,63 @@ class Rollout:
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
 
+    async def launch_server_process(self):
+        """
+        Make SGLang server a coroutine rather than a subprocess so that 
+        the task can exit properly when training or inference error occurs.
+        """
+        if not self.device_mesh["tp"].get_local_rank() == 0:
+            return
+
+        # TODO: support cross-node server
+        server_args = OmegaConf.to_container(self.config.server_args)
+        server_args = ServerArgs(
+            enable_memory_saver=True,
+            host=get_host(),
+            port=get_available_port(),
+            log_level="error",
+            **server_args
+        )
+        self.worker_url = server_args.url()
+        
+        (
+            tokenizer_manager,
+            template_manager,
+            scheduler_info
+        ) = _launch_subprocesses(server_args=server_args)
+        set_global_state(
+            _GlobalState(
+                tokenizer_manager=tokenizer_manager,
+                template_manager=template_manager,
+                scheduler_info=scheduler_info
+            )
+        )
+
+        app.is_single_tokenizer_mode = True
+        app.server_args = server_args
+        app.warmup_thread_args = (server_args, None, None)
+        set_uvicorn_logging_configs()
+        config = uvicorn.Config(
+            app,
+            host=server_args.host,
+            port=server_args.port,
+            log_level=server_args.log_level_http or server_args.log_level,
+            timeout_keep_alive=5,
+            loop="uvloop",
+        )
+        server = uvicorn.Server(config)
+        server.install_signal_handlers = False
+        asyncio.create_task(server.serve())
+
+        await async_request(
+            self.worker_url, "health", "GET", 10 * 60
+        ) # up to 10 minutes to load the model
+        
+        self.worker_urls = gather_and_concat_list(
+            [self.worker_url],
+            self.device_mesh["dp"].get_group()
+        )
+
     @time_logger("rollout")
     async def __call__(
         self,
@@ -174,75 +230,77 @@ class Rollout:
                 pendings.add(
                     asyncio.create_task(
                         sample_group.generate(
-                            self.env.generate
+                            router_url, self.env.generate
                         )
                     )
                 )
 
         if dist.get_rank() == 0:
 
-            config = self.config.train if train else self.config.test
-            dataloader = self.train_dataloader if train else self.test_dataloader
-            groups_to_complete = config.prompts_per_rollout or len(dataloader)
-            
-            tbar = progress_bar(
-                total=groups_to_complete, desc="Rollout"
-            )
+            async with Router(self.worker_urls) as router_url:
 
-            pendings, first_iter = set(), True
-            filtered_groups, completed_groups = 0, 0
-            all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
-            all_critic_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
-            metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
-
-            if train and config.partial_rollout:
-                _schedule_tasks(self.sample_buffer)
-
-            while completed_groups < groups_to_complete:
-
-                if first_iter or (train and config.partial_rollout):
-                    sample_groups = dataloader(
-                        groups_to_complete - len(pendings)
-                    )
-                    _schedule_tasks(sample_groups)
-
-                done, pendings = await asyncio.wait(
-                    pendings, return_when=asyncio.FIRST_COMPLETED
+                config = self.config.train if train else self.config.test
+                dataloader = self.train_dataloader if train else self.test_dataloader
+                groups_to_complete = config.prompts_per_rollout or len(dataloader)
+                
+                tbar = progress_bar(
+                    total=groups_to_complete, desc="Rollout"
                 )
 
-                for task in done:
-                    if completed_groups < groups_to_complete:
-                        tbar.update()
-                    completed_groups += 1
-                    sample_group = task.result()
-                    if first_iter:
-                        sample_group.print()
-                        first_iter = False
-                    await asyncio.to_thread(sample_group.save, step)
-                    (
-                        all_tensor_dicts_delta,
-                        all_critic_tensor_dicts_delta,
-                        metrics_delta
-                    ) = (
-                        sample_group.to_all_tensor_dicts_and_metrics()
-                    )
-                    for k, v in metrics_delta.items():
-                        metrics[k].extend(v)
-                    if (
-                        train and config.dynamic_filtering and
-                        len(metrics_delta["rewards"]) > 1 and
-                        torch.tensor(metrics_delta["rewards"]).std() == 0
-                    ):
-                        filtered_groups += 1
-                        continue
-                    all_tensor_dicts.extend(all_tensor_dicts_delta)
-                    all_critic_tensor_dicts.extend(all_critic_tensor_dicts_delta)
+                pendings, first_iter = set(), True
+                filtered_groups, completed_groups = 0, 0
+                all_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
+                all_critic_tensor_dicts: List[List[Dict[str, torch.Tensor]]] = []
+                metrics: Dict[str, List[Union[float, int, bool]]] = defaultdict(list)
 
-            if train and config.partial_rollout:
-                await async_request(self.worker_urls, "pause_generation")
-                done, _ = await asyncio.wait(pendings)
-                self.sample_buffer = [task.result() for task in done]
-                await async_request(self.worker_urls, "continue_generation")
+                if train and config.partial_rollout:
+                    _schedule_tasks(self.sample_buffer)
+
+                while completed_groups < groups_to_complete:
+
+                    if first_iter or (train and config.partial_rollout):
+                        sample_groups = dataloader(
+                            groups_to_complete - len(pendings)
+                        )
+                        _schedule_tasks(sample_groups)
+
+                    done, pendings = await asyncio.wait(
+                        pendings, return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    for task in done:
+                        if completed_groups < groups_to_complete:
+                            tbar.update()
+                        completed_groups += 1
+                        sample_group = task.result()
+                        if first_iter:
+                            sample_group.print()
+                            first_iter = False
+                        await asyncio.to_thread(sample_group.save, step)
+                        (
+                            all_tensor_dicts_delta,
+                            all_critic_tensor_dicts_delta,
+                            metrics_delta
+                        ) = (
+                            sample_group.to_all_tensor_dicts_and_metrics()
+                        )
+                        for k, v in metrics_delta.items():
+                            metrics[k].extend(v)
+                        if (
+                            train and config.dynamic_filtering and
+                            len(metrics_delta["rewards"]) > 1 and
+                            torch.tensor(metrics_delta["rewards"]).std() == 0
+                        ):
+                            filtered_groups += 1
+                            continue
+                        all_tensor_dicts.extend(all_tensor_dicts_delta)
+                        all_critic_tensor_dicts.extend(all_critic_tensor_dicts_delta)
+                        
+                if train and config.partial_rollout:
+                    await async_request(self.worker_urls, "pause_generation")
+                    done, _ = await asyncio.wait(pendings)
+                    self.sample_buffer = [task.result() for task in done]
+                    await async_request(self.worker_urls, "continue_generation")
 
             metrics["dynamic_filtering_ratio"].append(
                 filtered_groups / completed_groups
@@ -251,7 +309,8 @@ class Rollout:
             metrics = {f"{k}/{suffix}": v for k, v in metrics.items()}
             gather_and_log(metrics, step)
 
-        dist.barrier(group=GLOO_GROUP)
+        # Use GLOO group to avoid affecting SGLang server
+        await asyncio.to_thread(dist.barrier, group=GLOO_GROUP)
 
         if not train:
             return
@@ -384,11 +443,3 @@ class Rollout:
                 json={"tags": ["kv_cache"]}
             )
         dist.barrier(group=GLOO_GROUP)
-
-    def close(self):
-
-        if dist.get_rank() == 0:
-            self.router_process.terminate()
-
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self.server_process.terminate()

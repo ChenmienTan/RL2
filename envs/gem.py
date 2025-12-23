@@ -64,6 +64,7 @@ async def env_step(
 async def generate(
     config: DictConfig,
     tokenizer: AutoTokenizer,
+    router_url: str,
     sample: Sample
 ):
     sampling_params = OmegaConf.to_container(config.sampling_params)
@@ -98,7 +99,7 @@ async def generate(
     while True:
 
         response = await async_request(
-            config.router_url,
+            router_url,
             "generate",
             json={
                 "input_ids": sample.state_dict["states"],

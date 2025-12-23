@@ -1,9 +1,10 @@
-from typing import Any, Optional, List, Literal
+from typing import Any, Optional, List, Literal, Callable
 import os
 import json
 import socket
 import asyncio
 import aiohttp
+import functools
 from datetime import timedelta
 import torch
 import torch.distributed as dist
@@ -22,7 +23,7 @@ def get_available_port() -> int:
 
 def initialize_global_process_group(
     create_gloo_group: bool = False,
-    timeout_second: int =36000
+    timeout_second: int = 36000
 ):
     
     dist.init_process_group(
@@ -90,21 +91,30 @@ def gather_and_concat_list(
         else None
     )
 
-async def open_session():
+def with_session(func: Callable) -> Callable:
 
-    global SESSION
-    SESSION = aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=0),
-        timeout=aiohttp.ClientTimeout(total=None)
-    )
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
 
-async def close_session():
-    await SESSION.close()
+        global SESSION
+        SESSION = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=0),
+            timeout=aiohttp.ClientTimeout(total=None)
+        )
+
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            await SESSION.close()
+
+    return wrapper
 
 async def async_request(
     url: str | List[str],
     endpoint: str,
     method: Literal["POST", "GET"] = "POST",
+    max_trials: int = 3,
+    retry_delay: int = 1,
     **kwargs
 ):
     if isinstance(url, list):
@@ -113,15 +123,25 @@ async def async_request(
             for u in url
         ))
 
-    match method:
-        case "POST":
-            req_ctx = SESSION.post(f"{url}/{endpoint}", **kwargs)
-        case "GET":
-            req_ctx = SESSION.get(f"{url}/{endpoint}", **kwargs)
+    for trial in range(max_trials):
 
-    async with req_ctx as response:
-        response.raise_for_status()
         try:
-            return await response.json(content_type=None)
-        except json.decoder.JSONDecodeError:
-            return await response.text()
+
+            match method:
+                case "POST":
+                    req_ctx = SESSION.post(f"{url}/{endpoint}", **kwargs)
+                case "GET":
+                    req_ctx = SESSION.get(f"{url}/{endpoint}", **kwargs)
+
+            async with req_ctx as response:
+                response.raise_for_status()
+                try:
+                    return await response.json(content_type=None)
+                except json.decoder.JSONDecodeError:
+                    return await response.text()
+        
+        except:
+            
+            if trial == max_trials - 1:
+                raise
+            await asyncio.sleep(retry_delay)
