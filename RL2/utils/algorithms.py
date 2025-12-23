@@ -241,25 +241,14 @@ def critic_ppo_loss(
     config: DictConfig, minibatch: Dict[str, torch.Tensor]
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    if config.enable_cross_entropy_loss:
-
-        losses = F.binary_cross_entropy(
-            minibatch["values"],
-            minibatch["returns"],
-            reduction="none"
-        )
-        clip_ratios = torch.zeros_like(losses)
-
-    else:
-
-        clipped_values = torch.clamp(
-            minibatch["values"],
-            minibatch["old_values"] - config.clip,
-            minibatch["old_values"] + config.clip
-        )
-        mse = (minibatch["values"] - minibatch["returns"]).pow(2)
-        clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
-        losses = torch.max(mse, clipped_mse)
-        clip_ratios = mse < clipped_mse
+    clipped_values = torch.clamp(
+        minibatch["values"],
+        minibatch["old_values"] - config.clip,
+        minibatch["old_values"] + config.clip
+    )
+    mse = (minibatch["values"] - minibatch["returns"]).pow(2)
+    clipped_mse = (clipped_values - minibatch["returns"]).pow(2)
+    losses = torch.max(mse, clipped_mse)
+    clip_ratios = mse < clipped_mse
 
     return losses, clip_ratios
