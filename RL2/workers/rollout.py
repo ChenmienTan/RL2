@@ -24,6 +24,7 @@ from RL2.utils.communication import (
     get_host,
     get_available_port,
     get_gloo_group,
+    broadcast_object,
     gather_and_concat_list,
     sync_request,
     async_request
@@ -77,11 +78,7 @@ class Rollout:
         self._prepare_device_mesh()
         self._prepare_environment_variables()
 
-        if self.device_mesh["tp"].get_local_rank() == 0:
-            self._launch_server_process()
-        
         if dist.get_rank() == 0:
-            self._launch_router_process()
 
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
@@ -91,6 +88,13 @@ class Rollout:
 
             self._prepare_environment()
             self.sample_buffer: List[SampleGroup] = []
+
+            self._launch_router_process()
+
+        dist.barrier(group=get_gloo_group())
+        
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self._launch_server_process()
 
     def _prepare_device_mesh(self):
 
@@ -152,6 +156,13 @@ class Rollout:
         PROCESSES.append(server_process)
         
         self.worker_url = server_args.url()
+
+        router_url = broadcast_object(
+            self.router_url if dist.get_rank() == 0 else None,
+            process_group=self.device_mesh["dp"].get_group(),
+            group_src=0
+        )
+        sync_request(router_url, f"add_worker?url={self.worker_url}")
         self.worker_urls = gather_and_concat_list(
             [self.worker_url],
             self.device_mesh["dp"].get_group()
@@ -160,7 +171,6 @@ class Rollout:
     def _launch_router_process(self):
 
         router_args = RouterArgs(
-            worker_urls=self.worker_urls,
             host=get_host(),
             port=get_available_port(),
             log_level="error"
