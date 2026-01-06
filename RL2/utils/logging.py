@@ -64,7 +64,7 @@ def gather_and_log(
     metrics: Dict[str, List[float]],
     step: int,
     process_group: Optional[dist.ProcessGroup] = None,
-    metrics_to_sum: List[str] = ["loss"]
+    metrics_to_sum: List[str] = ["loss", "train_loss", "test_loss"]
 ):
 
     if process_group is not None:
