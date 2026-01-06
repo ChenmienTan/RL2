@@ -27,7 +27,6 @@ trainer:
   experiment_name: null
   load_ckpt_from: null
   n_epochs: 1
-  test_freq: null
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null
   use_wandb: true
