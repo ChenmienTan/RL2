@@ -119,7 +119,8 @@ class FSDPActor(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update actor"
         ):
-            minibatch = self._forward(minibatch)
+            with torch.set_grad_enabled(train):
+                minibatch = self._forward(minibatch)
             loss = aggregate_values(
                 - minibatch["logps"],
                 minibatch["action_mask"],
@@ -129,7 +130,8 @@ class FSDPActor(FSDPWorker):
             )
             if train:
                 self._scale_loss(loss).backward()
-            metrics["loss"].append(loss.item())
+            prefix = "train" if train else "test"
+            metrics[f"{prefix}_loss"].append(loss.item())
 
         if train:
             grad_norm = self._optimizer_step()
