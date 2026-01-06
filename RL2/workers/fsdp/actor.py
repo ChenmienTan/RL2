@@ -102,9 +102,10 @@ class FSDPActor(FSDPWorker):
         return self._gather_data(processed_minibatches)
 
     @time_logger("update_actor")
-    def sft_update(
+    def sft_step(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
+        train: bool,
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict)
@@ -126,11 +127,13 @@ class FSDPActor(FSDPWorker):
                 total_actions,
                 total_sequences
             )
-            self._scale_loss(loss).backward()
+            if train:
+                self._scale_loss(loss).backward()
             metrics["loss"].append(loss.item())
 
-        grad_norm = self._optimizer_step()
-        metrics["grad_norm"].append(grad_norm)
+        if train:
+            grad_norm = self._optimizer_step()
+            metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
     @time_logger("update_actor")

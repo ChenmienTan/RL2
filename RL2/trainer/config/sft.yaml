@@ -3,13 +3,21 @@ defaults:
 - actor: fsdp
 
 data:
-  path: null
-  max_length: null
-  batch_size: 128
-  prompt_key: prompt
-  response_key: response
-  messages_key: messages
-  apply_chat_template: true
+  train:
+    path: null
+    max_length: null
+    batch_size: 128
+    prompt_key: prompt
+    response_key: response
+    messages_key: messages
+    apply_chat_template: true
+  test:
+    path: null
+    max_length: ${data.train.max_length}
+    prompt_key: ${data.train.prompt_key}
+    response_key: ${data.train.response_key}
+    messages_key: ${data.train.messages_key}
+    apply_chat_template: ${data.train.apply_chat_template}
 
 actor:
   avg_level: token
@@ -19,6 +27,7 @@ trainer:
   experiment_name: null
   load_ckpt_from: null
   n_epochs: 1
+  test_freq: null
   save_dir: ckpts/${trainer.experiment_name}
   save_freq: null
   use_wandb: true

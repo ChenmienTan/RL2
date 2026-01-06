@@ -15,11 +15,18 @@ class SFTTrainer(Trainer):
 
         self.actor = initialize_actor(config.actor, True)
         dataset = SFTDataset(
-            config.data, self.actor.tokenizer
+            config.data.train, self.actor.tokenizer
         )
         self.train_dataloader = get_dataloader(
             dataset, config.data.batch_size
         )
+        if config.data.test.path:
+            dataset = SFTDataset(
+                config.data.test, self.actor.tokenizer
+            )
+            self.test_dataloader = get_dataloader(
+                dataset, len(dataset)
+            )
         self.actor.prepare_scheduler(
             self.config.trainer.n_epochs * len(self.train_dataloader)
         )
@@ -37,9 +44,15 @@ class SFTTrainer(Trainer):
                 disable=(dist.get_rank() != 0),
                 initial=step % len(self.train_dataloader)
             ):
+
                 step += 1
-                self.actor.sft_update(tensor_dict, step)
+                self.actor.sft_step(tensor_dict, True, step)
                 self.save_ckpt((self.actor,), step)
+
+                if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
+                    for tensor_dict in self.test_dataloader:
+                        self.actor.sft_step(tensor_dict, False, step)
+
         self.save_model((self.actor,))
 
 
