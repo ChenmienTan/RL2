@@ -46,7 +46,7 @@ class MegatronActor(MegatronWorker):
             minibatch: Dict[str, torch.Tensor],
             cu_seqlens: torch.Tensor,
             logits: torch.Tensor,
-            non_loss_data: bool = True
+            non_loss_data: bool = False
         ) -> Dict[str, torch.Tensor]:
 
             compute_logps_and_entropy(
@@ -85,7 +85,8 @@ class MegatronActor(MegatronWorker):
         def f(
             minibatch: Dict[str, torch.Tensor],
             cu_seqlens: torch.Tensor,
-            logits: torch.Tensor
+            logits: torch.Tensor,
+            non_loss_data: bool = False
         ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             compute_logps_and_entropy(
@@ -107,7 +108,7 @@ class MegatronActor(MegatronWorker):
             )
             prefix = "train" if train else "test"
             metric = {f"{prefix}_loss": [loss.item()]}
-            return (self._scale_loss(loss), metric) if train else metric
+            return metric if non_loss_data else (self._scale_loss(loss), metric)
 
         with torch.set_grad_enabled(train):
             metrics = self._forward_backward(f, minibatches)
