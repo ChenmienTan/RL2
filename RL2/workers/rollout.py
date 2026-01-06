@@ -15,9 +15,9 @@ from sglang.srt.entrypoints.http_server_engine import launch_server_process
 from sglang.srt.utils import  MultiprocessingSerializer
 from sglang_router.launch_router import RouterArgs, launch_router
 from RL2.datasets import (
+    get_dataloaders,
     pack_tensor_dicts,
     RLDataset,
-    StatefulCycleDataLoader,
     SampleGroup
 )
 from RL2.utils.communication import (
@@ -49,15 +49,6 @@ PROCESSES = []
 
 def shutdown_processes_when_exit(func):
 
-    def _shutdown_process(
-        process: multiprocessing.Process,
-        timeout: int = 3
-    ):
-        process.terminate()
-        process.join(timeout=timeout)
-        if process.is_alive():
-            process.kill()
-
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
 
@@ -65,7 +56,10 @@ def shutdown_processes_when_exit(func):
             return await func(*args, **kwargs)
         finally:
             for process in PROCESSES:
-                _shutdown_process(process)
+                process.terminate()
+                process.join(timeout=3)
+                if process.is_alive():
+                    process.kill()
 
     return wrapper
 
@@ -83,8 +77,9 @@ class Rollout:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
-            self.train_dataloader = self._prepare_dataloader(True)
-            self.test_dataloader = self._prepare_dataloader(False)
+            self.train_dataloader, self.test_dataloader = get_dataloaders(
+                RLDataset, config, self.tokenizer, 1
+            )
 
             self._prepare_environment()
             self.sample_buffer: List[SampleGroup] = []
@@ -127,19 +122,6 @@ class Rollout:
         )
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_visible_devices)
         monkey_patch_torch_reductions()
-
-    def _prepare_dataloader(self, train: bool):
-        
-        dataset = RLDataset(
-            self.config.train if train else self.config.test,
-            self.tokenizer
-        )
-        return StatefulCycleDataLoader(
-            dataset=dataset,
-            batch_size=1,
-            shuffle=True,
-            collate_fn=lambda batch: batch[0]
-        )
 
     def _launch_server_process(self):
 

@@ -3,7 +3,7 @@ from omegaconf import DictConfig
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
-from RL2.datasets import RMDataset, get_dataloader
+from RL2.datasets import RMDataset, get_dataloaders
 from RL2.workers import initialize_critic
 from RL2.utils.communication import initialize_global_process_group
 
@@ -14,11 +14,8 @@ class RMTrainer(Trainer):
         super().__init__(config)
 
         self.critic = initialize_critic(config.critic)
-        dataset = RMDataset(
-            config.data, self.critic.tokenizer
-        )
-        self.train_dataloader = get_dataloader(
-            dataset, config.data.batch_size
+        self.train_dataloader, self.test_dataloader = get_dataloaders(
+            RMDataset, config.data, self.critic.tokenizer
         )
         self.critic.prepare_scheduler(
             self.config.trainer.n_epochs * len(self.train_dataloader)
@@ -37,9 +34,14 @@ class RMTrainer(Trainer):
                 disable=(dist.get_rank() != 0),
                 initial=step % len(self.train_dataloader)
             ):
+
                 step += 1
-                self.critic.rm_update(tensor_dict, step)
+                self.critic.rm_step(tensor_dict, True, step)
                 self.save_ckpt((self.critic,), step)
+
+            for tensor_dict in self.test_dataloader:
+                self.critic.rm_step(tensor_dict, False, step)
+
         self.save_model((self.critic,))
 
 

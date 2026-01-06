@@ -3,7 +3,7 @@ from omegaconf import DictConfig
 import torch.distributed as dist
 from tqdm import tqdm
 from RL2.trainer import Trainer
-from RL2.datasets import DPODataset, get_dataloader
+from RL2.datasets import DPODataset, get_dataloaders
 from RL2.workers import initialize_actor
 from RL2.utils.communication import initialize_global_process_group
 
@@ -15,11 +15,8 @@ class DPOTrainer(Trainer):
 
         self.actor = initialize_actor(config.actor, True)
         self.ref_actor = initialize_actor(config.ref_actor, False)
-        dataset = DPODataset(
-            config.data, self.actor.tokenizer
-        )
-        self.train_dataloader = get_dataloader(
-            dataset, config.data.batch_size
+        self.train_dataloader, self.test_dataloader = get_dataloaders(
+            DPODataset, config.data, self.actor.tokenizer
         )
         self.actor.prepare_scheduler(
             self.config.trainer.n_epochs * len(self.train_dataloader)
@@ -38,10 +35,16 @@ class DPOTrainer(Trainer):
                 disable=(dist.get_rank() != 0),
                 initial=step % len(self.train_dataloader)
             ):
+
                 step += 1
                 tensor_dict = self.ref_actor.compute_logps(tensor_dict, step, True)
-                self.actor.dpo_update(tensor_dict, step)
+                self.actor.dpo_step(tensor_dict, True, step)
                 self.save_ckpt((self.actor,), step)
+
+            for tensor_dict in self.test_dataloader:
+                tensor_dict = self.ref_actor.compute_logps(tensor_dict, step, True)
+                self.actor.dpo_step(tensor_dict, False, step)
+
         self.save_model((self.actor,))
 
 

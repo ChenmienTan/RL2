@@ -64,9 +64,10 @@ class MegatronCritic(MegatronWorker):
         return self._gather_data(minibatches)
 
     @time_logger("update_critic")
-    def rm_update(
+    def rm_step(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
+        train: bool,
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict, pair=True)
@@ -78,7 +79,8 @@ class MegatronCritic(MegatronWorker):
         def f(
             minibatch: Dict[str, torch.Tensor],
             cu_seqlens: torch.Tensor,
-            logits: torch.Tensor
+            logits: torch.Tensor,
+            non_loss_data: bool = False
         ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             minibatch["values"] = gather_action_logits(
@@ -93,12 +95,15 @@ class MegatronCritic(MegatronWorker):
             )
             losses, metric = rm_loss(minibatch)
             loss = losses.sum() / total_pairs
-            metric["loss"] = [loss.item()]
-            return self._scale_loss(loss), metric
+            prefix = "train" if train else "test"
+            metric[f"{prefix}_loss"] = [loss.item()]
+            return metric if non_loss_data else (self._scale_loss(loss), metric)
 
-        metrics = self._forward_backward(f, minibatches)
-        grad_norm = self._optimizer_step()
-        metrics["grad_norm"] = [grad_norm]
+        with torch.set_grad_enabled(train):
+            metrics = self._forward_backward(f, minibatches)
+        if train:
+            grad_norm = self._optimizer_step()
+            metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_critic")

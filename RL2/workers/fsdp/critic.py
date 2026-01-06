@@ -78,9 +78,10 @@ class FSDPCritic(FSDPWorker):
         return self._gather_data(processed_minibatches)
 
     @time_logger("update_critic")
-    def rm_update(
+    def rm_step(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
+        train: bool,
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict, pair=True)
@@ -92,16 +93,20 @@ class FSDPCritic(FSDPWorker):
         for minibatch in progress_bar(
             minibatches, desc="Update critic"
         ):
-            minibatch = self._forward(minibatch)
+            with torch.set_grad_enabled(train):
+                minibatch = self._forward(minibatch)
             losses, metric = rm_loss(minibatch)
             loss = losses.sum() / total_pairs
-            self._scale_loss(loss).backward()
-            metric["loss"] = [loss.item()]
+            if train:
+                self._scale_loss(loss).backward()
+            prefix = "train" if train else "test"
+            metric[f"{prefix}_loss"] = [loss.item()]
             for k, v in metric.items():
                 metrics[k].extend(v)
 
-        grad_norm = self._optimizer_step()
-        metrics["grad_norm"].append(grad_norm)
+        if train:
+            grad_norm = self._optimizer_step()
+            metrics["grad_norm"].append(grad_norm)
         gather_and_log(metrics, step, self.device_mesh["dp"].get_group())
 
     @time_logger("update_critic")

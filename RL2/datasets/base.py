@@ -151,7 +151,10 @@ class BaseDataset(Dataset):
 
 
 def get_dataloaders(
-    dataset_cls: BaseDataset, config: DictConfig, tokenizer: AutoTokenizer
+    dataset_cls: BaseDataset,
+    config: DictConfig,
+    tokenizer: AutoTokenizer,
+    batch_size: int = None
 ) -> Tuple[StatefulDataLoader, StatefulDataLoader]:
 
     def _load_dataset(path: str):
@@ -195,6 +198,10 @@ def get_dataloaders(
     train_dataset = dataset_cls(config.train, tokenizer, train_dataset)
     test_dataset = dataset_cls(config.test, tokenizer, test_dataset)
 
-    train_dataloader = _get_dataloader(train_dataset, config.train.batch_size)
-    test_dataloader = _get_dataloader(test_dataset, len(test_dataset))
+    train_dataloader = _get_dataloader(
+        train_dataset, batch_size or config.train.batch_size
+    )
+    test_dataloader = _get_dataloader(
+        test_dataset, batch_size or len(test_dataset)
+    )
     return train_dataloader, test_dataloader

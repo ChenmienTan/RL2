@@ -118,9 +118,10 @@ class MegatronActor(MegatronWorker):
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
-    def dpo_update(
+    def dpo_step(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
+        train: bool,
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict, pair=True)
@@ -132,7 +133,8 @@ class MegatronActor(MegatronWorker):
         def f(
             minibatch: Dict[str, torch.Tensor],
             cu_seqlens: torch.Tensor,
-            logits: torch.Tensor
+            logits: torch.Tensor,
+            non_loss_data: bool = False
         ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
             compute_logps_and_entropy(
@@ -147,12 +149,15 @@ class MegatronActor(MegatronWorker):
             )
             losses, metric = dpo_loss(self.config, minibatch)
             loss = losses.sum() / total_pairs
-            metric["loss"] = [loss.item()]
-            return self._scale_loss(loss), metric
+            prefix = "train" if train else "test"
+            metric[f"{prefix}_loss"] = [loss.item()]
+            return metric if non_loss_data else (self._scale_loss(loss), metric)
 
-        metrics = self._forward_backward(f, minibatches)
-        grad_norm = self._optimizer_step()
-        metrics["grad_norm"] = [grad_norm]
+        with torch.set_grad_enabled(train):
+            metrics = self._forward_backward(f, minibatches)
+        if train:
+            grad_norm = self._optimizer_step()
+            metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")

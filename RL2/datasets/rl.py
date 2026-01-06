@@ -273,6 +273,9 @@ class RLDataset(BaseDataset):
         sample = self.dataset[idx]
         return SampleGroup(self.config, self.tokenizer, sample)
 
+    def collate_fn(self, batch: Tuple[SampleGroup]) -> SampleGroup:
+        return batch[0]
+
 
 class StatefulCycleDataLoader(StatefulDataLoader):
 
