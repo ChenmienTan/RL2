@@ -85,6 +85,7 @@ class FSDPCritic(FSDPWorker):
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict, pair=True)
+        self.model.train(train)
 
         total_pairs = count_total(
             minibatches, "eos_mask", self.device_mesh["dp"].get_group()

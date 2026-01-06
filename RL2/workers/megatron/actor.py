@@ -75,6 +75,8 @@ class MegatronActor(MegatronWorker):
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict)
+        for model in self.model:
+            model.train(train)
 
         total_actions, total_sequences = count_total(
             minibatches,
@@ -125,6 +127,8 @@ class MegatronActor(MegatronWorker):
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict, pair=True)
+        for model in self.model:
+            model.train(train)
 
         total_pairs = count_total(
             minibatches, "eos_mask", mpu.get_data_parallel_group()
