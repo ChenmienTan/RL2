@@ -18,7 +18,7 @@ class SFTTrainer(Trainer):
             config.data.train, self.actor.tokenizer
         )
         self.train_dataloader = get_dataloader(
-            dataset, config.data.batch_size
+            dataset, config.data.train.batch_size
         )
         if config.data.test.path:
             dataset = SFTDataset(
