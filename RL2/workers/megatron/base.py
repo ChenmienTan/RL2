@@ -254,7 +254,7 @@ class MegatronWorker(Worker):
             process_group=mpu.get_pipeline_model_parallel_group(),
             group_src=mpu.get_pipeline_model_parallel_world_size() - 1
         )
-        if torch.is_grad_enabled():
+        if isinstance(next(iter(output[0].values())), list):
             metrics = {
                 k: [item for metric in output for item in metric[k]]
                 for k in output[0].keys()

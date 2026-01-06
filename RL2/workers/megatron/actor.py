@@ -105,7 +105,9 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            return self._scale_loss(loss), {"loss": [loss.item()]}
+            prefix = "train" if train else "test"
+            metric = {f"{prefix}_loss": [loss.item()]}
+            return (self._scale_loss(loss), metric) if train else metric
 
         with torch.set_grad_enabled(train):
             metrics = self._forward_backward(f, minibatches)
