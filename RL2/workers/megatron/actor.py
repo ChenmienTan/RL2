@@ -68,9 +68,10 @@ class MegatronActor(MegatronWorker):
         return self._gather_data(minibatches)
 
     @time_logger("update_actor")
-    def sft_update(
+    def sft_step(
         self,
         tensor_dict: Optional[Dict[str, torch.Tensor]],
+        train: bool,
         step: int
     ):
         minibatches = self._scatter_data(tensor_dict)
@@ -106,8 +107,11 @@ class MegatronActor(MegatronWorker):
             )
             return self._scale_loss(loss), {"loss": [loss.item()]}
 
-        metrics, grad_norm = self._forward_backward(f, minibatches)
-        metrics["grad_norm"] = [grad_norm]
+        with torch.set_grad_enabled(train):
+            metrics = self._forward_backward(f, minibatches)
+        if train:
+            grad_norm = self._optimizer_step()
+            metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
     @time_logger("update_actor")
@@ -143,7 +147,8 @@ class MegatronActor(MegatronWorker):
             metric["loss"] = [loss.item()]
             return self._scale_loss(loss), metric
 
-        metrics, grad_norm = self._forward_backward(f, minibatches)
+        metrics = self._forward_backward(f, minibatches)
+        grad_norm = self._optimizer_step()
         metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
@@ -208,7 +213,8 @@ class MegatronActor(MegatronWorker):
 
                 return self._scale_loss(loss), metric
             
-            metric, grad_norm = self._forward_backward(f, batch)
+            metric = self._forward_backward(f, batch)
+            grad_norm = self._optimizer_step()
             for k, v in metric.items():
                 metrics[k].append(
                     gather_and_reduce(v, mpu.get_data_parallel_group())

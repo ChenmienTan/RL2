@@ -96,7 +96,8 @@ class MegatronCritic(MegatronWorker):
             metric["loss"] = [loss.item()]
             return self._scale_loss(loss), metric
 
-        metrics, grad_norm = self._forward_backward(f, minibatches)
+        metrics = self._forward_backward(f, minibatches)
+        grad_norm = self._optimizer_step()
         metrics["grad_norm"] = [grad_norm]
         gather_and_log(metrics, step, mpu.get_data_parallel_group())
 
@@ -153,7 +154,8 @@ class MegatronCritic(MegatronWorker):
 
                 return self._scale_loss(loss), metric
 
-            metric, grad_norm = self._forward_backward(f, batch)
+            metric = self._forward_backward(f, batch)
+            grad_norm = self._optimizer_step()
             for k, v in metric.items():
                 metrics[k].append(
                     gather_and_reduce(v, mpu.get_data_parallel_group())

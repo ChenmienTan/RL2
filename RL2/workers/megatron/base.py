@@ -255,20 +255,24 @@ class MegatronWorker(Worker):
             group_src=mpu.get_pipeline_model_parallel_world_size() - 1
         )
         if torch.is_grad_enabled():
-            self._load_optimizer_to_device(torch.cuda.current_device())
-            _, grad_norm, _ = self.optimizer.step()
-            self.optimizer.zero_grad()
-            self._load_optimizer_to_device("cpu")
-            for model in self.model:
-                model.zero_grad_buffer()
-            self.scheduler.step(1)
             metrics = {
                 k: [item for metric in output for item in metric[k]]
                 for k in output[0].keys()
             }
-            return metrics, grad_norm
+            return metrics
         else:
             return output
+
+    def _optimizer_step(self):
+
+        self._load_optimizer_to_device(torch.cuda.current_device())
+        _, grad_norm, _ = self.optimizer.step()
+        self.optimizer.zero_grad()
+        self._load_optimizer_to_device("cpu")
+        for model in self.model:
+            model.zero_grad_buffer()
+        self.scheduler.step(1)
+        return grad_norm
 
     def _get_ckpt(self) -> Dict[str, Dict[str, Any]]:
 
