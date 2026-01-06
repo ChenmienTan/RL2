@@ -1,6 +1,6 @@
 from .base import (
     BaseDataset,
-    get_dataloader,
+    get_dataloaders,
     get_tensor_dict,
     pack_tensor_dicts
 )

@@ -1,7 +1,8 @@
-from typing import List, Optional, Dict, Sequence, Any
+from typing import List, Optional, Dict, Sequence, Any, Tuple
 from omegaconf import DictConfig
 import os
 import datasets
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -54,23 +55,15 @@ def pack_tensor_dicts(
 
 class BaseDataset(Dataset):
     
-    def __init__(self, config: DictConfig, tokenizer: AutoTokenizer):
+    def __init__(
+        self,
+        config: DictConfig,
+        tokenizer: AutoTokenizer,
+        dataset: datasets.Dataset
+    ):
 
         self.config = config
         self.tokenizer = tokenizer
-        
-        # TODO: support concatnating multiple datasets
-        if "@" in config.path:
-            split, path = config.path.split("@")
-        else:
-            split, path = "train", config.path
-        ext = os.path.splitext(path)[-1].strip(".")
-        if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
-            if ext == "jsonl":
-                ext = "json"
-            self.dataset = datasets.load_dataset(ext, data_files=path, split=split)
-        else:
-            self.dataset = datasets.load_dataset(path, split=split)
 
     def _tokenize_prompt_response(
         self, prompt: str, response: str, rm: bool = False
@@ -157,13 +150,51 @@ class BaseDataset(Dataset):
         return len(self.dataset)
 
 
-def get_dataloader(
-    dataset: BaseDataset, batch_size: int
-) -> StatefulDataLoader:
-    return StatefulDataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-        collate_fn=dataset.collate_fn
-    )
+def get_dataloaders(
+    dataset_cls: BaseDataset, config: DictConfig, tokenizer: AutoTokenizer
+) -> Tuple[StatefulDataLoader, StatefulDataLoader]:
+
+    def _load_dataset(path: str):
+
+        # TODO: support concatnating multiple datasets
+        if "@" in path:
+            split, path = path.split("@")
+        else:
+            split, path = "train", path
+
+        ext = os.path.splitext(path)[-1].strip(".")
+        if ext in ["json", "jsonl", "csv", "parquet", "arrow"]:
+            if ext == "jsonl":
+                ext = "json"
+            return datasets.load_dataset(ext, data_files=path, split=split)
+        else:
+            return datasets.load_dataset(path, split=split)
+
+    def _get_dataloader(dataset: BaseDataset, batch_size: int):
+        return StatefulDataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=dataset.collate_fn
+        )
+
+    train_dataset = _load_dataset(config.train.path)
+    if config.test.path:
+        test_dataset = _load_dataset(config.test.path)
+    else:
+        total_size = len(train_dataset)
+        indices = np.arange(total_size)
+        np.random.seed(42)
+        np.random.shuffle(indices)
+        split_point = int(0.9 * total_size)
+        train_indices, test_indices = indices[:split_point], indices[split_point:]
+        test_dataset = train_dataset.select(test_indices)
+        train_dataset = train_dataset.select(train_indices)
+
+    train_dataset = dataset_cls(config.train, tokenizer, train_dataset)
+    test_dataset = dataset_cls(config.test, tokenizer, test_dataset)
+
+    train_dataloader = _get_dataloader(train_dataset, config.train.batch_size)
+    test_dataloader = _get_dataloader(test_dataset, len(test_dataset))
+    return train_dataloader, test_dataloader
