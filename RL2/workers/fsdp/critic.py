@@ -96,12 +96,12 @@ class FSDPCritic(FSDPWorker):
         ):
             with torch.set_grad_enabled(train):
                 minibatch = self._forward(minibatch)
-            losses, metric = rm_loss(minibatch)
+            suffix = "train" if train else "test"
+            losses, metric = rm_loss(minibatch, suffix)
             loss = losses.sum() / total_pairs
             if train:
                 self._scale_loss(loss).backward()
-            prefix = "train" if train else "test"
-            metric[f"{prefix}_loss"] = [loss.item()]
+            metric[f"loss/{suffix}"] = [loss.item()]
             for k, v in metric.items():
                 metrics[k].extend(v)
 

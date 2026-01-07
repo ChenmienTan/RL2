@@ -150,16 +150,18 @@ def compute_advantages(
         tensor_dict["advantages"] -= config.actor.kl.coef * old_ref_approx_kl
 
 def rm_loss(
-    minibatch: Dict[str, torch.Tensor]
+    minibatch: Dict[str, torch.Tensor], suffix: str
 ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
     chosen_rewards, rejected_rewards = minibatch["values"].sum(-1).view(-1, 2).T
     reward_margins = chosen_rewards - rejected_rewards
     losses = - F.logsigmoid(reward_margins)
-    return losses, {"accuracy": (reward_margins > 0).tolist()}
+    return losses, {f"accuracy/{suffix}": (reward_margins > 0).tolist()}
 
 def dpo_loss(
-    config: DictConfig, minibatch: Dict[str, torch.Tensor]
+    config: DictConfig,
+    minibatch: Dict[str, torch.Tensor],
+    suffix: str
 ) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
 
     chosen_rewards, rejected_rewards = config.beta * (
@@ -168,10 +170,10 @@ def dpo_loss(
     reward_margins = chosen_rewards - rejected_rewards
     losses = - F.logsigmoid(reward_margins)
     metric = {
-        "rewards/chosen": chosen_rewards.tolist(),
-        "rewards/rejected": rejected_rewards.tolist(),
-        "rewards/margin": reward_margins.tolist(),
-        "accuracy": (reward_margins > 0).tolist()
+        f"rewards/chosen/{suffix}": chosen_rewards.tolist(),
+        f"rewards/rejected/{suffix}": rejected_rewards.tolist(),
+        f"rewards/margin/{suffix}": reward_margins.tolist(),
+        f"accuracy/{suffix}": (reward_margins > 0).tolist()
     }
     return losses, metric
 

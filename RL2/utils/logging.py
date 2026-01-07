@@ -64,7 +64,7 @@ def gather_and_log(
     metrics: Dict[str, List[float]],
     step: int,
     process_group: Optional[dist.ProcessGroup] = None,
-    metrics_to_sum: List[str] = ["loss", "train_loss", "test_loss"]
+    metrics_to_sum: List[str] = ["loss"]
 ):
 
     if process_group is not None:
@@ -77,7 +77,7 @@ def gather_and_log(
         return
 
     metrics = {
-        k: sum(v) / (1.0 if k in metrics_to_sum else len(v))
+        k: sum(v) / (1.0 if any(m in k for m in metrics_to_sum) else len(v))
         for k, v in metrics.items()
     }
     tqdm.write(f"Step {step}, " + ", ".join([

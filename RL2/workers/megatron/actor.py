@@ -151,10 +151,10 @@ class MegatronActor(MegatronWorker):
                 mpu.get_context_parallel_group(),
                 cu_seqlens
             )
-            losses, metric = dpo_loss(self.config, minibatch)
+            suffix = "train" if train else "test"
+            losses, metric = dpo_loss(self.config, minibatch, suffix)
             loss = losses.sum() / total_pairs
-            prefix = "train" if train else "test"
-            metric[f"{prefix}_loss"] = [loss.item()]
+            metric[f"loss/{suffix}"] = [loss.item()]
             return metric if non_loss_data else (self._scale_loss(loss), metric)
 
         with torch.set_grad_enabled(train):
