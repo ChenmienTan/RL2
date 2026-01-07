@@ -108,8 +108,8 @@ class MegatronActor(MegatronWorker):
                 total_actions,
                 total_sequences
             )
-            prefix = "train" if train else "test"
-            metric = {f"{prefix}_loss": [loss.item()]}
+            suffix = "train" if train else "test"
+            metric = {f"loss/{suffix}": [loss.item()]}
             return metric if non_loss_data else (self._scale_loss(loss), metric)
 
         with torch.set_grad_enabled(train):

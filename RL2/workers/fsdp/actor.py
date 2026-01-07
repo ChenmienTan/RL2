@@ -131,8 +131,8 @@ class FSDPActor(FSDPWorker):
             )
             if train:
                 self._scale_loss(loss).backward()
-            prefix = "train" if train else "test"
-            metrics[f"{prefix}_loss"].append(loss.item())
+            suffix = "train" if train else "test"
+            metrics[f"loss/{suffix}"].append(loss.item())
 
         if train:
             grad_norm = self._optimizer_step()
