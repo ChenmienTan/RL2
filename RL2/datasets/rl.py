@@ -8,7 +8,6 @@ from copy import deepcopy
 from collections import defaultdict
 from dataclasses import dataclass, field
 import torch
-from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 from RL2.datasets import get_tensor_dict, BaseDataset
 from RL2.utils.communication import async_request
@@ -275,24 +274,3 @@ class RLDataset(BaseDataset):
 
     def collate_fn(self, batch: Tuple[SampleGroup]) -> SampleGroup:
         return batch[0]
-
-
-class StatefulCycleDataLoader(StatefulDataLoader):
-
-    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
-        """
-        Fetch a variable number of data.
-        """
-        
-        if not hasattr(self, "iterator"):
-            self.iterator = iter(self)
-
-        data_list = []
-        for _ in range(batch_size):
-            try:
-                data = next(self.iterator)
-            except StopIteration:
-                self.iterator = iter(self)
-                data = next(self.iterator)
-            data_list.append(data)
-        return data_list

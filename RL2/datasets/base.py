@@ -151,6 +151,27 @@ class BaseDataset(Dataset):
         return len(self.dataset)
 
 
+class StatefulCycleDataLoader(StatefulDataLoader):
+
+    def __call__(self, batch_size: int) -> List[Dict[str, Any]]:
+        """
+        Fetch a variable number of data.
+        """
+        
+        if not hasattr(self, "iterator"):
+            self.iterator = iter(self)
+
+        data_list = []
+        for _ in range(batch_size):
+            try:
+                data = next(self.iterator)
+            except StopIteration:
+                self.iterator = iter(self)
+                data = next(self.iterator)
+            data_list.append(data)
+        return data_list
+
+
 def get_dataloaders(
     dataset_cls: BaseDataset,
     config: DictConfig,
@@ -175,7 +196,7 @@ def get_dataloaders(
             return datasets.load_dataset(path, split=split)
 
     def _get_dataloader(dataset: BaseDataset, batch_size: int):
-        return StatefulDataLoader(
+        return StatefulCycleDataLoader(
             dataset=dataset,
             batch_size=batch_size,
             shuffle=True,
