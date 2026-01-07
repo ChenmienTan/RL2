@@ -191,8 +191,8 @@ def get_dataloaders(
         indices = np.arange(total_size)
         np.random.seed(42)
         np.random.shuffle(indices)
-        split_point = int(0.9 * total_size)
-        train_indices, test_indices = indices[:split_point], indices[split_point:]
+        split_point = int(config.test_ratio * total_size)
+        train_indices, test_indices = indices[split_point:], indices[:split_point]
         test_dataset = train_dataset.select(test_indices)
         train_dataset = train_dataset.select(train_indices)
 

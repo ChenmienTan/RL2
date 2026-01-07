@@ -18,6 +18,7 @@ data:
     response_key: ${data.train.response_key}
     messages_key: ${data.train.messages_key}
     apply_chat_template: ${data.train.apply_chat_template}
+  test_ratio: 0.03
 
 actor:
   avg_level: token

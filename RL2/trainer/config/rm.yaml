@@ -3,13 +3,22 @@ defaults:
 - critic: fsdp
 
 data:
-  path: null
-  max_length: null
-  batch_size: 128
-  prompt_key: prompt
-  chosen_key: chosen
-  rejected_key: rejected
-  apply_chat_template: true
+  train:
+    path: null
+    max_length: null
+    batch_size: 128
+    prompt_key: prompt
+    chosen_key: chosen
+    rejected_key: rejected
+    apply_chat_template: true
+  test:
+    path: null
+    max_length: ${data.train.max_length}
+    prompt_key: ${data.train.prompt_key}
+    chosen_key: ${data.train.chosen_key}
+    rejected_key: ${data.train.rejected_key}
+    apply_chat_template: ${data.train.apply_chat_template}
+  test_ratio: 0.03
 
 trainer:
   project: null
