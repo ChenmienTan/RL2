@@ -64,7 +64,8 @@ class BaseDataset(Dataset):
 
         self.config = config
         self.tokenizer = tokenizer
-
+        self.dataset = dataset
+        
     def _tokenize_prompt_response(
         self, prompt: str, response: str, rm: bool = False
     ) -> Dict[str, torch.Tensor]:
