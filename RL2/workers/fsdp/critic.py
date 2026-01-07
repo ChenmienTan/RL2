@@ -92,7 +92,7 @@ class FSDPCritic(FSDPWorker):
         ) // 2
         metrics = defaultdict(list)
         for minibatch in progress_bar(
-            minibatches, desc="Update critic"
+            minibatches, desc="RM step"
         ):
             with torch.set_grad_enabled(train):
                 minibatch = self._forward(minibatch)
@@ -122,7 +122,7 @@ class FSDPCritic(FSDPWorker):
         self.model.train()
         tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
-            desc="Update critic"
+            desc="Update Critic"
         )
         metrics = defaultdict(list)
         for batch in batches:

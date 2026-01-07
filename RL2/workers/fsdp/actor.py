@@ -118,7 +118,7 @@ class FSDPActor(FSDPWorker):
         )
         metrics = defaultdict(list)
         for minibatch in progress_bar(
-            minibatches, desc="Update actor"
+            minibatches, desc="SFT step"
         ):
             with torch.set_grad_enabled(train):
                 minibatch = self._forward(minibatch)
@@ -154,7 +154,7 @@ class FSDPActor(FSDPWorker):
         ) // 2
         metrics = defaultdict(list)
         for minibatch in progress_bar(
-            minibatches, desc="Update actor"
+            minibatches, desc="DPO step"
         ):
             with torch.set_grad_enabled(train):
                 minibatch = self._forward(minibatch)
@@ -186,7 +186,7 @@ class FSDPActor(FSDPWorker):
         self.model.train()
         tbar = progress_bar(
             total=sum([len(batch) for batch in batches]),
-            desc="Update actor"
+            desc="Update Actor"
         )
         metrics = defaultdict(list)
         for batch in batches:
