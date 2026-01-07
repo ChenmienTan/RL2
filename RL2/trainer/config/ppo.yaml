@@ -57,6 +57,7 @@ rollout:
       max_new_tokens: ${rollout.train.sampling_params.max_new_tokens}
       stop: ${rollout.train.sampling_params.stop}
     save_dir: ${trainer.save_dir}/test
+  test_ratio: 0.03
   env_path: null
   bucket_size: 512
 
