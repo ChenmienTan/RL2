@@ -94,17 +94,18 @@ class BaseDataset(Dataset):
         tensor_dicts = []
         for turn in range(len(messages)):
             
-            is_this_turn_assistant = messages[turn]["role"] == "assistant"
-            is_next_turn_assistant = turn + 1 < len(messages) and messages[turn + 1]["role"] == "assistant"
+            is_this_turn_assistant = messages[turn]["role"] == "tool"
+            is_next_turn_assistant = turn + 1 < len(messages) and messages[turn + 1]["role"] == "tool"
 
             if not is_this_turn_assistant and not is_next_turn_assistant:
                 continue
 
             text = self.tokenizer.apply_chat_template(
                 messages[:turn + 1],
-                add_generation_prompt=is_next_turn_assistant,
                 tokenize=False
             )
+            if is_next_turn_assistant:
+                text += "<|im_start|>user\n<tool_response>\n"
 
             if text.startswith(prev_text):
         
