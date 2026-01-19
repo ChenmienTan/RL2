@@ -47,12 +47,13 @@ class FSDPWorker(Worker):
             )
         )
 
-    def _init_weight_context(self) -> ContextManager:
+    def _init_weight_context(self, use_meta_tensor: bool = True) -> ContextManager:
         # TODO: why offloading is incompatible with initialization on meta device?
         if any([
             dist.get_rank() == 0,
             self.device_mesh["tp"].size() > 1 and self.device_mesh["tp"].get_local_rank() == 0,
-            getattr(self.config, "offload_model", False)
+            getattr(self.config, "offload_model", False),
+            not use_meta_tensor
         ]):
             return torch.device("cpu")
         return init_empty_weights()
