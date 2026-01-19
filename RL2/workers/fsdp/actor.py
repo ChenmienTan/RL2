@@ -2,7 +2,7 @@ from typing import Dict, Optional
 from omegaconf import DictConfig
 from collections import defaultdict
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoConfig
 from RL2.workers.fsdp import FSDPWorker
 from RL2.utils.sequences import count_total, slide_along_cp, gather_along_cp
 from RL2.utils.fsdp.context_parallelism import update_ring_attn_params
@@ -32,7 +32,9 @@ class FSDPActor(FSDPWorker):
         else:
             model_cls = AutoModelForCausalLM
 
-        with self._init_weight_context():
+        model_config = AutoConfig.from_pretrained(config.model_name, trust_remote_code=True)
+        # otherwise, the FSDP will hang during initialization
+        with self._init_weight_context(not model_config.tie_word_embeddings):
             self.model = model_cls.from_pretrained(
                 config.model_name,
                 trust_remote_code=True,
