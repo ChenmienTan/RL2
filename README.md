@@ -224,3 +224,9 @@ If you find this library useful, please cite in the following format
     year={2025}
 }
 ```
+
+## Job Oppotunities
+
+We are [Accio](https://www.accio.com/?src=p_GoogleDisplay_web&cmpgn=23138010880&adgrp=&fditm=&tgt=&locintrst=&locphyscl=1013962&mtchtyp=&ntwrk=x&device=c&dvcmdl=&creative=&plcmnt=&plcmntcat=&aceid=&position=&gad_source=1&gad_campaignid=23128156539&gbraid=0AAAAA-lIm6h93W5FT1DWH95ZQ28d5GT1N&gclid=Cj0KCQiAwYrNBhDcARIsAGo3u30JTZWSXpG4z0mrHg1E9y1ZaLOFYUI6hvWFNltm38VxLGBL-7MydRMaAnEZEALw_wcB), the world's first AI sourcing agent.
+We are always looking for talents in Hangzhou.
+Send us an [email](sicong.xsc@alibaba-inc.com) if you are interested in internship/full-time positions in post-training/agent.
