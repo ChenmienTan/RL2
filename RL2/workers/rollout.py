@@ -18,7 +18,8 @@ from RL2.datasets import (
     get_dataloaders,
     pack_tensor_dicts,
     RLDataset,
-    SampleGroup
+    SampleGroup,
+    build_env_generate
 )
 from RL2.utils.communication import (
     get_host,
@@ -69,6 +70,9 @@ class Rollout:
     def __init__(self, config: DictConfig):
         
         self.config = config
+        if config.multi_agent.enabled:
+            assert config.multi_agent.shared_policy, \
+                "Phase-1 multi-agent rollout only supports shared_policy=true."
         self._prepare_device_mesh()
         self._prepare_environment_variables()
 
@@ -80,6 +84,8 @@ class Rollout:
             self.train_dataloader, self.test_dataloader = get_dataloaders(
                 RLDataset, config, self.tokenizer, 1
             )
+            self.train_dataloader.dataset.config.multi_agent = config.multi_agent
+            self.test_dataloader.dataset.config.multi_agent = config.multi_agent
 
             self._prepare_environment()
             self.sample_buffer: List[SampleGroup] = []
@@ -173,6 +179,18 @@ class Rollout:
         )
         self.env = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.env)
+        if hasattr(self.env, "generate"):
+            self.generate_fn = self.env.generate
+            return
+        if hasattr(self.env, "step"):
+            self.generate_fn = build_env_generate(
+                self.env.step,
+                getattr(self.env, "reset", None)
+            )
+            return
+        raise AttributeError(
+            "Custom environment must define `generate` or `step`."
+        )
 
     @time_logger("rollout")
     async def __call__(
@@ -189,7 +207,7 @@ class Rollout:
                 pendings.add(
                     asyncio.create_task(
                         sample_group.generate(
-                            self.router_url, self.env.generate
+                            self.router_url, self.generate_fn
                         )
                     )
                 )

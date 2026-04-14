@@ -159,6 +159,151 @@ Diverge values may be used when needed.
 
 The function should be included in a Python script where the path is specified by `actor.rollout.env_path`.
 
+#### Multi-Agent PPO Environments
+
+RL2 also supports multi-agent episodes without changing the actor update path. In phase 1, all agents share the same actor policy and the rollout is flattened back into per-agent training samples before PPO updates.
+
+You may still provide a custom `generate(...)` function, but `env_path` can now also expose `reset(...)` and `step(...)` directly:
+
+```python
+async def reset(sample, tokenizer, extra_info, **kwargs) -> Dict:
+    return {
+        "agent_ids": ["planner", "solver"],
+        "current_agent": "planner",
+        "next_observations": {
+            "planner": "...",
+            "solver": "..."
+        },
+        "done_agents": [],
+        "shared_info": {},
+        "extra_info": extra_info
+    }
+
+async def step(
+    state: str,
+    action: str,
+    extra_info: Dict,
+    agent_id: str,
+    agent_states: Dict[str, str],
+    shared_info: Dict,
+    **kwargs
+) -> Dict:
+    return {
+        "current_agent": "solver",
+        "next_observations": {
+            "solver": "..."
+        },
+        "rewards": {
+            "planner": 0.0,
+            "solver": 1.0
+        },
+        "scores": {
+            "planner": 0.0,
+            "solver": 1.0
+        },
+        "done": False,
+        "done_agents": ["planner"],
+        "shared_info": {
+            "global_reward": 1.0,
+            "state_value_target": 1.0
+        },
+        "extra_info": extra_info
+    }
+```
+
+Multi-agent response fields:
+
+* `agent_ids`: all agent ids in the episode
+* `current_agent`: the next agent to act; if omitted and `rollout.multi_agent.agent_order=turn_based`, RL2 will select the next unfinished agent in order
+* `next_observations`: next prompt/message text for one or more agents
+* `rewards`: per-agent immediate rewards
+* `scores`: optional per-agent logging scores
+* `done_agents`: agents whose trajectories are complete
+* `shared_info`: shared episode state, team reward, or centralized critic targets
+* `extra_info`: passthrough metadata from the dataset / environment
+
+Relevant PPO config:
+
+```yaml
+rollout:
+  env_path: envs/multi_agent_countdown.py
+  multi_agent:
+    enabled: true
+    shared_policy: true
+    reward_mode: individual # `individual`, `team`, `mixed`
+    agent_order: turn_based # `turn_based`, `env_driven`
+
+critic:
+  use_centralized_value: false
+```
+
+See `envs/multi_agent_countdown.py` for a minimal shared-policy example.
+
+`envs/multi_agent_countdown.py` is compatible with:
+
+* the existing `Chenmien/Countdown` dataset fields (`prompt`, `numbers`, `target`)
+* local PPO-style data containing `prompt` plus `extra_info.answer`
+
+Minimal local JSON / JSONL example:
+
+```json
+[
+    {
+        "prompt": "Use 1, 3, 4, and 6 exactly once to make 24.",
+        "numbers": [1, 3, 4, 6],
+        "target": 24,
+        "extra_info": {
+            "answer": "(6 / (1 - 3 / 4))"
+        }
+    }
+]
+```
+
+One-click launch on a cluster:
+
+```bash
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+The script defaults to `Chenmien/Countdown`, and you can override paths / cluster settings without editing the file:
+
+```bash
+TRAIN_PATH="/path/to/train.jsonl" \
+TEST_PATH="/path/to/test.jsonl" \
+MODEL_NAME="Qwen/Qwen2.5-7B-Instruct" \
+NPROC_PER_NODE=8 \
+NNODES=2 \
+NODE_RANK=0 \
+MASTER_ADDR="10.0.0.1" \
+MASTER_PORT=29500 \
+EXPERIMENT_NAME="qwen2.5-7b_multi_agent_countdown" \
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+For SLURM clusters, you can submit the companion script directly:
+
+```bash
+sbatch examples/multi_agent_countdown_reinforce.slurm
+```
+
+Common SLURM overrides:
+
+```bash
+sbatch \
+  --nodes=2 \
+  --gres=gpu:8 \
+  --job-name=rl2-ma-countdown \
+  --export=ALL,TRAIN_PATH=/path/train.jsonl,TEST_PATH=/path/test.jsonl,MODEL_NAME=Qwen/Qwen2.5-7B-Instruct,EXPERIMENT_NAME=qwen2.5-7b_multi_agent_countdown \
+  examples/multi_agent_countdown_reinforce.slurm
+```
+
+The SLURM script derives:
+
+* `MASTER_ADDR` from the first hostname in `SLURM_JOB_NODELIST`
+* `NODE_RANK` from `SLURM_NODEID`
+* `NNODES` from `SLURM_NNODES`
+* `NPROC_PER_NODE` from `SLURM_GPUS_ON_NODE` unless you override it manually
+
 ### Launch [[Examples]](./examples)
 
 Use `torchrun` to launch the trainer. For example, for single node
