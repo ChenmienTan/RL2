@@ -216,20 +216,34 @@ class NAgentCollaborative(MultiAgentBase):
 
 # Initialize environment with desired number of agents
 # You can change this number easily!
-NUM_AGENTS = 3  # Try 3, 4, 5, or more!
+NUM_AGENTS = int(os.getenv("NUM_AGENTS", "3"))
 
-set_environment(lambda: NAgentCollaborative(num_agents=NUM_AGENTS))
+env_instance = NAgentCollaborative(num_agents=NUM_AGENTS)
+set_environment(lambda: env_instance)
+
+
+# Export reset and step for RL2 framework
+# Import these from multi_agent_base after environment is set
+import multi_agent_base
+reset = multi_agent_base.reset
+step = multi_agent_base.step
 
 
 # Example: Create environments with different agent counts
 def create_3_agent_env():
-    set_environment(lambda: NAgentCollaborative(num_agents=3))
+    global env_instance
+    env_instance = NAgentCollaborative(num_agents=3)
+    set_environment(lambda: env_instance)
 
 def create_5_agent_env():
-    set_environment(lambda: NAgentCollaborative(num_agents=5))
+    global env_instance
+    env_instance = NAgentCollaborative(num_agents=5)
+    set_environment(lambda: env_instance)
 
 def create_10_agent_env():
-    set_environment(lambda: NAgentCollaborative(num_agents=10))
+    global env_instance
+    env_instance = NAgentCollaborative(num_agents=10)
+    set_environment(lambda: env_instance)
 
 
 # For command-line configuration

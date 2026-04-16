@@ -234,11 +234,15 @@ class MultiAgentBase(ABC):
             next_agent, agent_id, action, new_state, agent_states
         )
 
-        next_observation = tokenizer.apply_chat_template(
-            [{"role": "user", "content": next_prompt}],
-            add_generation_prompt=True,
-            tokenize=False
-        ) if hasattr(self, 'tokenizer') else next_prompt
+        # Use stored tokenizer if available
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            next_observation = self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": next_prompt}],
+                add_generation_prompt=True,
+                tokenize=False
+            )
+        else:
+            next_observation = next_prompt
 
         return {
             "current_agent": next_agent,

@@ -226,6 +226,12 @@ def create_custom_team(roles: List[str], descriptions: Dict[str, str] = None):
 NUM_AGENTS = create_software_team()
 
 
+# Export reset and step for RL2 framework
+import multi_agent_base
+reset = multi_agent_base.reset
+step = multi_agent_base.step
+
+
 # Command-line interface
 if __name__ == "__main__":
     import sys

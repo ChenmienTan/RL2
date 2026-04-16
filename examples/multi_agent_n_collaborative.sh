@@ -13,6 +13,9 @@ MASTER_PORT="${MASTER_PORT:-29500}"
 # Number of agents (easily configurable!)
 NUM_AGENTS="${NUM_AGENTS:-3}"  # Try 3, 5, 10, or more!
 
+# Policy mode (shared or independent)
+SHARED_POLICY="${SHARED_POLICY:-true}"  # true=shared (default), false=independent
+
 # Dataset
 TRAIN_PATH="${TRAIN_PATH:-train@your_org/Problems}"
 TEST_PATH="${TEST_PATH:-test@your_org/Problems}"
@@ -37,6 +40,7 @@ echo "========================================="
 echo "N-Agent Collaborative Training"
 echo "========================================="
 echo "Number of agents: ${NUM_AGENTS}"
+echo "Policy mode: ${SHARED_POLICY}"
 echo "GPUs: ${NPROC_PER_NODE}"
 echo "Prompts per rollout: ${PROMPTS_PER_ROLLOUT}"
 echo "========================================="
@@ -58,7 +62,7 @@ torchrun \
     rollout.test.path="${TEST_PATH}" \
     rollout.env_path=envs/multi_agent_n_collaborative.py \
     rollout.multi_agent.enabled=true \
-    rollout.multi_agent.shared_policy=true \
+    rollout.multi_agent.shared_policy="${SHARED_POLICY}" \
     rollout.multi_agent.reward_mode="${REWARD_MODE}" \
     rollout.multi_agent.agent_order="${AGENT_ORDER}" \
     actor.model_name="${MODEL_NAME}" \

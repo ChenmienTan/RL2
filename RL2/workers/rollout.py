@@ -68,11 +68,14 @@ def shutdown_processes_when_exit(func):
 class Rollout:
 
     def __init__(self, config: DictConfig):
-        
+
         self.config = config
         if config.multi_agent.enabled:
-            assert config.multi_agent.shared_policy, \
-                "Phase-1 multi-agent rollout only supports shared_policy=true."
+            if not config.multi_agent.shared_policy:
+                print("[WARNING] Independent policy mode enabled. This requires more GPU memory.")
+                print("[INFO] Each agent will have its own model and optimizer.")
+            else:
+                print("[INFO] Shared policy mode enabled. All agents share one model.")
         self._prepare_device_mesh()
         self._prepare_environment_variables()
 
