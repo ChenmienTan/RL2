@@ -20,7 +20,7 @@ It achieves comparable performance with other popular LLM RL libraries.
 
 Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenThoughts_archive), [SkyworkRM](https://wandb.ai/chenmientan/SkyworkRM_archive), [UltraFeedback](https://wandb.ai/chenmientan/UltraFeedback_archive), [TinyZero](https://wandb.ai/chenmientan/Countdown_archive), [LetterCounting](https://wandb.ai/chenmientan/LetterCounting_archive), and [SearchR1](https://wandb.ai/chenmientan/SearchR1_archive).
 
-## Incoming Features
+## Features
 
 - [X] Support Megatron backend to increase GPU utilization for Mixture-of-Expert
 - [ ] Support Low-Rank Adaptation to decrease GPU memory comsumption
@@ -28,6 +28,62 @@ Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenT
 - [X] Support partial rollout to decrease GPU idle
 - [X] Use SGLang Router to forward requests for load balance between inference engines
 - [X] Integrate GEM to scale environments
+- [X] **Multi-Agent Reinforcement Learning** - Production-ready multi-agent training with 2-3+ agents
+
+## 🤖 Multi-Agent Training
+
+RL2 now supports **production-ready multi-agent reinforcement learning**! Train multiple agents to collaborate, compete, or debate.
+
+### Quick Start
+
+```bash
+# 4-GPU training with 2 agents (Planner + Solver)
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+NPROC_PER_NODE=4 PROMPTS_PER_ROLLOUT=16 \
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+### Scale to N Agents ⭐ NEW
+
+```bash
+# 5 agents
+NUM_AGENTS=5 bash examples/multi_agent_n_collaborative.sh
+
+# 10 agents
+NUM_AGENTS=10 NPROC_PER_NODE=8 PROMPTS_PER_ROLLOUT=160 \
+bash examples/multi_agent_n_collaborative.sh
+
+# Custom team (software, research, creative)
+TEAM_TYPE=software bash examples/multi_agent_dynamic_team.sh
+```
+
+### Available Environments
+
+| Environment | Agents | Scalable | Description |
+|-------------|--------|----------|-------------|
+| **Countdown** | 2 | No | Math problem solving (Planner + Solver) |
+| **Debate** | 2 | No | Pro vs Con debate on topics |
+| **Code Review** | 2 | No | Collaborative code improvement |
+| **Story Writing** | 3 | No | Creative writing (Planner + Writer + Editor) |
+| **N-Collaborative** ⭐ | **3-20+** | **Yes** | N agents collaborate on problems |
+| **Dynamic Team** ⭐ | **4-20+** | **Yes** | Configurable teams with custom roles |
+
+### Documentation
+
+📚 **[Complete Multi-Agent Documentation](docs/README.md)**
+- [Multi-Agent Guide](docs/multi_agent_guide.md) - Complete tutorial with examples
+- **[Scaling to N Agents](docs/scaling_to_n_agents.md)** ⭐ - Scale from 2 to 20+ agents
+- [API Reference](docs/api_reference.md) - Detailed API documentation
+- [Troubleshooting](docs/multi_agent_guide.md#troubleshooting) - Common issues and solutions
+
+### Key Features
+
+- ✅ **2-20+ agents** - Easily scalable with `MultiAgentBase` framework
+- ✅ **Shared or individual policies** - Flexible policy sharing
+- ✅ **Multiple reward modes** - Team, individual, or competitive rewards
+- ✅ **Dynamic team configuration** - Custom roles and team sizes
+- ✅ **Scalable** - Tested on 2/4/8 GPUs
+- ✅ **Production-ready** - Stable and well-documented
 
 ## Getting Started
 

@@ -77,25 +77,40 @@ class Rollout:
         self._prepare_environment_variables()
 
         if dist.get_rank() == 0:
-
+            print(f"[Rank 0] Loading tokenizer from {config.server_args.model_path}")
             self.tokenizer = AutoTokenizer.from_pretrained(
                 config.server_args.model_path, trust_remote_code=True
             )
+            print(f"[Rank 0] Loading datasets...")
             self.train_dataloader, self.test_dataloader = get_dataloaders(
                 RLDataset, config, self.tokenizer, 1
             )
+            print(f"[Rank 0] Datasets loaded. Train size: {len(self.train_dataloader.dataset)}, Test size: {len(self.test_dataloader.dataset)}")
+            # Set multi_agent config with struct mode disabled
+            from omegaconf import OmegaConf
+            OmegaConf.set_struct(self.train_dataloader.dataset.config, False)
             self.train_dataloader.dataset.config.multi_agent = config.multi_agent
+            OmegaConf.set_struct(self.train_dataloader.dataset.config, True)
+            OmegaConf.set_struct(self.test_dataloader.dataset.config, False)
             self.test_dataloader.dataset.config.multi_agent = config.multi_agent
+            OmegaConf.set_struct(self.test_dataloader.dataset.config, True)
 
+            print(f"[Rank 0] Preparing environment from {config.env_path}")
             self._prepare_environment()
             self.sample_buffer: List[SampleGroup] = []
 
+            print(f"[Rank 0] Launching router process...")
             self._launch_router_process()
+            print(f"[Rank 0] Router launched successfully")
 
+        print(f"[Rank {dist.get_rank()}] Waiting at barrier before launching servers...")
         dist.barrier(group=get_gloo_group())
-        
+        print(f"[Rank {dist.get_rank()}] Passed barrier")
+
         if self.device_mesh["tp"].get_local_rank() == 0:
+            print(f"[Rank {dist.get_rank()}] Launching server process...")
             self._launch_server_process()
+            print(f"[Rank {dist.get_rank()}] Server launched")
 
     def _prepare_device_mesh(self):
 
@@ -134,7 +149,7 @@ class Rollout:
         # TODO: support cross-node server
         server_args = OmegaConf.to_container(self.config.server_args)
         server_args = ServerArgs(
-            enable_memory_saver=True,
+            enable_memory_saver=False,  # Disable to avoid Triton CPU tensor errors
             host=get_host(),
             port=get_available_port(),
             log_level="error",
@@ -142,26 +157,53 @@ class Rollout:
         )
         server_process = launch_server_process(server_args)
         PROCESSES.append(server_process)
-        
+
         self.worker_url = server_args.url()
+
+        # Wait for server to be ready
+        import time
+        max_retries = 30
+        for i in range(max_retries):
+            try:
+                sync_request(self.worker_url, "health", "GET", 3)
+                break
+            except Exception as e:
+                if i == max_retries - 1:
+                    raise RuntimeError(f"Server failed to start after {max_retries} attempts: {e}")
+                time.sleep(1)
 
         router_url = broadcast_object(
             self.router_url if dist.get_rank() == 0 else None,
             process_group=self.device_mesh["dp"].get_group(),
             group_src=0
         )
-        sync_request(router_url, f"add_worker?url={self.worker_url}")
+        # Register worker with router using correct endpoint
+        import json
+        sync_request(
+            router_url,
+            "workers",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            json={"url": self.worker_url}
+        )
         self.worker_urls = gather_and_concat_list(
             [self.worker_url],
             self.device_mesh["dp"].get_group()
         )
 
     def _launch_router_process(self):
+        import sys
+        import os
+
+        # Get a dynamic port for prometheus to avoid conflicts
+        prometheus_port = get_available_port()
 
         router_args = RouterArgs(
             host=get_host(),
             port=get_available_port(),
-            log_level="error"
+            log_level="error",
+            prometheus_port=prometheus_port,
+            prometheus_host="127.0.0.1"
         )
         self.router_url = f"http://{router_args.host}:{router_args.port}"
 
@@ -170,7 +212,19 @@ class Rollout:
         )
         router_process.start()
         PROCESSES.append(router_process)
-        sync_request(self.router_url, "health", "GET", 10)
+
+        # Wait for router to be ready with retries
+        import time
+        max_retries = 30
+        retry_interval = 2
+        for i in range(max_retries):
+            try:
+                sync_request(self.router_url, "health", "GET", 5)
+                break
+            except Exception as e:
+                if i == max_retries - 1:
+                    raise RuntimeError(f"Router failed to start after {max_retries} attempts: {e}")
+                time.sleep(retry_interval)
 
     def _prepare_environment(self):
 

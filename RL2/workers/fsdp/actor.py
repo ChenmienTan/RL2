@@ -34,7 +34,8 @@ class FSDPActor(FSDPWorker):
 
         model_config = AutoConfig.from_pretrained(config.model_name, trust_remote_code=True)
         # otherwise, the FSDP will hang during initialization
-        with self._init_weight_context(not model_config.tie_word_embeddings):
+        use_meta = not model_config.tie_word_embeddings
+        with self._init_weight_context(use_meta):
             self.model = model_cls.from_pretrained(
                 config.model_name,
                 trust_remote_code=True,

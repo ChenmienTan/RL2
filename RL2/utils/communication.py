@@ -120,10 +120,13 @@ def sync_request(
                 response.raise_for_status()
                 try:
                     return response.json()
-                except json.decoder.JSONDecodeError:
+                except (json.decoder.JSONDecodeError, requests.exceptions.JSONDecodeError):
                     return response.text
 
-            except:
+            except (json.decoder.JSONDecodeError, requests.exceptions.JSONDecodeError):
+                # JSON decode error is already handled above, just return text
+                return response.text
+            except Exception as e:
 
                 if trial == max_trials - 1:
                     raise
