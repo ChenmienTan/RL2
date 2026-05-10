@@ -60,6 +60,11 @@ rollout:
   test_ratio: 0.03
   env_path: null
   bucket_size: 512
+  multi_agent:
+    enabled: false
+    shared_policy: true
+    reward_mode: individual # `individual`, `team` or `mixed`
+    agent_order: turn_based # `turn_based` or `env_driven`
 
 ref_actor:
   temperature: ${rollout.train.sampling_params.temperature}
@@ -70,6 +75,7 @@ critic:
   clip: 0.5
   avg_level: ${actor.avg_level}
   offload_model: ${actor.offload_model}
+  use_centralized_value: false
 
 adv:
   estimator: reinforce # `reinforce` or `gae`

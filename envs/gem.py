@@ -116,6 +116,6 @@ async def generate(
             return
         
         response = await env_step(tokenizer, sample)
-        add_env_response(tokenizer, sample, response)
+        add_env_response(config, tokenizer, sample, response)
         if sample.status == Sample.Status.DONE:
             return

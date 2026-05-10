@@ -22,12 +22,22 @@ class PPOTrainer(Trainer):
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
+        # Check if independent policy mode
+        self.is_independent = (
+            config.multi_agent.enabled and
+            not config.multi_agent.shared_policy
+        ) if hasattr(config, 'multi_agent') else False
+
         if not config.trainer.eval_only:
 
             self.actor = initialize_actor(config.actor, True)
-            self.actor.prepare_scheduler(
-                self.config.trainer.total_steps
-            )
+
+            # For independent policy, actor is a dict
+            if not self.is_independent:
+                self.actor.prepare_scheduler(
+                    self.config.trainer.total_steps
+                )
+
             if config.actor.kl.coef > 0:
                 self.ref_actor = initialize_actor(config.ref_actor, False)
             if config.adv.estimator == "gae":
@@ -38,6 +48,40 @@ class PPOTrainer(Trainer):
 
         self.rollout = initialize_rollout(self.config.rollout)
 
+    def _get_or_create_actor(self, agent_id=None):
+        """Get actor for agent_id (creates if needed for independent policy)."""
+        if not self.is_independent:
+            return self.actor
+
+        # Independent policy: get or create actor for this agent
+        if agent_id not in self.actor:
+            from hydra.core.hydra_config import HydraConfig
+            hydra_config = HydraConfig.get()
+            backend = hydra_config.runtime.choices.get("actor")
+
+            if backend == "fsdp":
+                from RL2.workers.fsdp.actor import FSDPActor
+                self.actor[agent_id] = FSDPActor(self.config.actor, True)
+            elif backend == "megatron":
+                from RL2.workers.megatron.actor import MegatronActor
+                self.actor[agent_id] = MegatronActor(self.config.actor, True)
+
+            self.actor[agent_id].prepare_scheduler(self.config.trainer.total_steps)
+            print(f"[PPOTrainer] Created independent actor for {agent_id}")
+
+        return self.actor[agent_id]
+
+    def _apply_to_actors(self, func_name, *args, **kwargs):
+        """Apply a function to all actors (shared or independent)."""
+        if not self.is_independent:
+            return getattr(self.actor, func_name)(*args, **kwargs)
+
+        # Independent policy: apply to each actor
+        results = {}
+        for agent_id, actor in self.actor.items():
+            results[agent_id] = getattr(actor, func_name)(*args, **kwargs)
+        return results
+
     @shutdown_processes_when_exit
     @with_session
     async def train(self):
@@ -46,10 +90,10 @@ class PPOTrainer(Trainer):
             await self.rollout(False, 0)
             return
 
+        # Load checkpoint
+        actors_to_load = list(self.actor.values()) if self.is_independent else [self.actor]
         initial = self.load_ckpt(
-            (self.actor, self.critic)
-            if self.config.adv.estimator == "gae"
-            else (self.actor,)
+            tuple(actors_to_load) + ((self.critic,) if self.config.adv.estimator == "gae" else ())
         )
         for step in trange(
             1,
@@ -61,33 +105,34 @@ class PPOTrainer(Trainer):
             tensor_dict, cu_seqs = await self.rollout(True, step)
 
             if self.config.actor.kl.coef > 0:
-                tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
+                tensor_dict = self._apply_to_actors('compute_logps', tensor_dict, step)
             if self.config.adv.estimator == "gae":
                 tensor_dict = self.critic.compute_values(tensor_dict, step)
             if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
-                tensor_dict = self.actor.compute_logps(tensor_dict, step)
+                tensor_dict = self._apply_to_actors('compute_logps', tensor_dict, step)
 
             if dist.get_rank() == 0:
                 compute_advantages(self.config, tensor_dict, cu_seqs, step)
 
-            self.actor.ppo_update(tensor_dict, step)
+            self._apply_to_actors('ppo_update', tensor_dict, step)
             if self.config.adv.estimator == "gae":
                 self.critic.ppo_update(tensor_dict, step)
+
+            # Save checkpoint
+            actors_to_save = list(self.actor.values()) if self.is_independent else [self.actor]
             self.save_ckpt(
-                (self.actor, self.critic)
-                if self.config.adv.estimator == "gae"
-                else (self.actor,),
+                tuple(actors_to_save) + ((self.critic,) if self.config.adv.estimator == "gae" else ()),
                 step
             )
 
-            self.actor.update_rollout(self.rollout, step)
+            self._apply_to_actors('update_rollout', self.rollout, step)
             if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
                 await self.rollout(False, step)
 
+        # Save final model
+        actors_to_save = list(self.actor.values()) if self.is_independent else [self.actor]
         self.save_model(
-            (self.actor, self.critic)
-            if self.config.adv.estimator == "gae"
-            else (self.actor,)
+            tuple(actors_to_save) + ((self.critic,) if self.config.adv.estimator == "gae" else ())
         )
 
     @property

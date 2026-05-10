@@ -20,7 +20,7 @@ It achieves comparable performance with other popular LLM RL libraries.
 
 Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenThoughts_archive), [SkyworkRM](https://wandb.ai/chenmientan/SkyworkRM_archive), [UltraFeedback](https://wandb.ai/chenmientan/UltraFeedback_archive), [TinyZero](https://wandb.ai/chenmientan/Countdown_archive), [LetterCounting](https://wandb.ai/chenmientan/LetterCounting_archive), and [SearchR1](https://wandb.ai/chenmientan/SearchR1_archive).
 
-## Incoming Features
+## Features
 
 - [X] Support Megatron backend to increase GPU utilization for Mixture-of-Expert
 - [ ] Support Low-Rank Adaptation to decrease GPU memory comsumption
@@ -28,6 +28,62 @@ Also check our wandb report on [OpenThoughts](https://wandb.ai/chenmientan/OpenT
 - [X] Support partial rollout to decrease GPU idle
 - [X] Use SGLang Router to forward requests for load balance between inference engines
 - [X] Integrate GEM to scale environments
+- [X] **Multi-Agent Reinforcement Learning** - Production-ready multi-agent training with 2-3+ agents
+
+## 🤖 Multi-Agent Training
+
+RL2 now supports **production-ready multi-agent reinforcement learning**! Train multiple agents to collaborate, compete, or debate.
+
+### Quick Start
+
+```bash
+# 4-GPU training with 2 agents (Planner + Solver)
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+NPROC_PER_NODE=4 PROMPTS_PER_ROLLOUT=16 \
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+### Scale to N Agents ⭐ NEW
+
+```bash
+# 5 agents
+NUM_AGENTS=5 bash examples/multi_agent_n_collaborative.sh
+
+# 10 agents
+NUM_AGENTS=10 NPROC_PER_NODE=8 PROMPTS_PER_ROLLOUT=160 \
+bash examples/multi_agent_n_collaborative.sh
+
+# Custom team (software, research, creative)
+TEAM_TYPE=software bash examples/multi_agent_dynamic_team.sh
+```
+
+### Available Environments
+
+| Environment | Agents | Scalable | Description |
+|-------------|--------|----------|-------------|
+| **Countdown** | 2 | No | Math problem solving (Planner + Solver) |
+| **Debate** | 2 | No | Pro vs Con debate on topics |
+| **Code Review** | 2 | No | Collaborative code improvement |
+| **Story Writing** | 3 | No | Creative writing (Planner + Writer + Editor) |
+| **N-Collaborative** ⭐ | **3-20+** | **Yes** | N agents collaborate on problems |
+| **Dynamic Team** ⭐ | **4-20+** | **Yes** | Configurable teams with custom roles |
+
+### Documentation
+
+📚 **[Complete Multi-Agent Documentation](docs/README.md)**
+- [Multi-Agent Guide](docs/multi_agent_guide.md) - Complete tutorial with examples
+- **[Scaling to N Agents](docs/scaling_to_n_agents.md)** ⭐ - Scale from 2 to 20+ agents
+- [API Reference](docs/api_reference.md) - Detailed API documentation
+- [Troubleshooting](docs/multi_agent_guide.md#troubleshooting) - Common issues and solutions
+
+### Key Features
+
+- ✅ **2-20+ agents** - Easily scalable with `MultiAgentBase` framework
+- ✅ **Shared or individual policies** - Flexible policy sharing
+- ✅ **Multiple reward modes** - Team, individual, or competitive rewards
+- ✅ **Dynamic team configuration** - Custom roles and team sizes
+- ✅ **Scalable** - Tested on 2/4/8 GPUs
+- ✅ **Production-ready** - Stable and well-documented
 
 ## Getting Started
 
@@ -158,6 +214,151 @@ Diverge values may be used when needed.
 * `extra_info` contains everything not aforementioned, *e.g.*, answer.
 
 The function should be included in a Python script where the path is specified by `actor.rollout.env_path`.
+
+#### Multi-Agent PPO Environments
+
+RL2 also supports multi-agent episodes without changing the actor update path. In phase 1, all agents share the same actor policy and the rollout is flattened back into per-agent training samples before PPO updates.
+
+You may still provide a custom `generate(...)` function, but `env_path` can now also expose `reset(...)` and `step(...)` directly:
+
+```python
+async def reset(sample, tokenizer, extra_info, **kwargs) -> Dict:
+    return {
+        "agent_ids": ["planner", "solver"],
+        "current_agent": "planner",
+        "next_observations": {
+            "planner": "...",
+            "solver": "..."
+        },
+        "done_agents": [],
+        "shared_info": {},
+        "extra_info": extra_info
+    }
+
+async def step(
+    state: str,
+    action: str,
+    extra_info: Dict,
+    agent_id: str,
+    agent_states: Dict[str, str],
+    shared_info: Dict,
+    **kwargs
+) -> Dict:
+    return {
+        "current_agent": "solver",
+        "next_observations": {
+            "solver": "..."
+        },
+        "rewards": {
+            "planner": 0.0,
+            "solver": 1.0
+        },
+        "scores": {
+            "planner": 0.0,
+            "solver": 1.0
+        },
+        "done": False,
+        "done_agents": ["planner"],
+        "shared_info": {
+            "global_reward": 1.0,
+            "state_value_target": 1.0
+        },
+        "extra_info": extra_info
+    }
+```
+
+Multi-agent response fields:
+
+* `agent_ids`: all agent ids in the episode
+* `current_agent`: the next agent to act; if omitted and `rollout.multi_agent.agent_order=turn_based`, RL2 will select the next unfinished agent in order
+* `next_observations`: next prompt/message text for one or more agents
+* `rewards`: per-agent immediate rewards
+* `scores`: optional per-agent logging scores
+* `done_agents`: agents whose trajectories are complete
+* `shared_info`: shared episode state, team reward, or centralized critic targets
+* `extra_info`: passthrough metadata from the dataset / environment
+
+Relevant PPO config:
+
+```yaml
+rollout:
+  env_path: envs/multi_agent_countdown.py
+  multi_agent:
+    enabled: true
+    shared_policy: true
+    reward_mode: individual # `individual`, `team`, `mixed`
+    agent_order: turn_based # `turn_based`, `env_driven`
+
+critic:
+  use_centralized_value: false
+```
+
+See `envs/multi_agent_countdown.py` for a minimal shared-policy example.
+
+`envs/multi_agent_countdown.py` is compatible with:
+
+* the existing `Chenmien/Countdown` dataset fields (`prompt`, `numbers`, `target`)
+* local PPO-style data containing `prompt` plus `extra_info.answer`
+
+Minimal local JSON / JSONL example:
+
+```json
+[
+    {
+        "prompt": "Use 1, 3, 4, and 6 exactly once to make 24.",
+        "numbers": [1, 3, 4, 6],
+        "target": 24,
+        "extra_info": {
+            "answer": "(6 / (1 - 3 / 4))"
+        }
+    }
+]
+```
+
+One-click launch on a cluster:
+
+```bash
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+The script defaults to `Chenmien/Countdown`, and you can override paths / cluster settings without editing the file:
+
+```bash
+TRAIN_PATH="/path/to/train.jsonl" \
+TEST_PATH="/path/to/test.jsonl" \
+MODEL_NAME="Qwen/Qwen2.5-7B-Instruct" \
+NPROC_PER_NODE=8 \
+NNODES=2 \
+NODE_RANK=0 \
+MASTER_ADDR="10.0.0.1" \
+MASTER_PORT=29500 \
+EXPERIMENT_NAME="qwen2.5-7b_multi_agent_countdown" \
+bash examples/multi_agent_countdown_reinforce.sh
+```
+
+For SLURM clusters, you can submit the companion script directly:
+
+```bash
+sbatch examples/multi_agent_countdown_reinforce.slurm
+```
+
+Common SLURM overrides:
+
+```bash
+sbatch \
+  --nodes=2 \
+  --gres=gpu:8 \
+  --job-name=rl2-ma-countdown \
+  --export=ALL,TRAIN_PATH=/path/train.jsonl,TEST_PATH=/path/test.jsonl,MODEL_NAME=Qwen/Qwen2.5-7B-Instruct,EXPERIMENT_NAME=qwen2.5-7b_multi_agent_countdown \
+  examples/multi_agent_countdown_reinforce.slurm
+```
+
+The SLURM script derives:
+
+* `MASTER_ADDR` from the first hostname in `SLURM_JOB_NODELIST`
+* `NODE_RANK` from `SLURM_NODEID`
+* `NNODES` from `SLURM_NNODES`
+* `NPROC_PER_NODE` from `SLURM_GPUS_ON_NODE` unless you override it manually
 
 ### Launch [[Examples]](./examples)
 

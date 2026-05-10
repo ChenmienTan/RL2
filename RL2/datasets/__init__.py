@@ -14,5 +14,6 @@ from .rl import (
     initialize_state_dict,
     add_llm_response,
     add_env_response,
-    base_generate
+    base_generate,
+    build_env_generate
 )

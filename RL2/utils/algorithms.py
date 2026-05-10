@@ -26,8 +26,19 @@ def compute_approx_kl(
         raise NotImplementedError
 
 def _compute_gae(
-    tensor_dict: Dict[str, torch.Tensor], gamma: float, lamda: float
+    tensor_dict: Dict[str, torch.Tensor],
+    gamma: float,
+    lamda: float,
+    use_centralized_value: bool = False
 ) -> Dict[str, torch.Tensor]:
+    if use_centralized_value and "state_value_targets" in tensor_dict:
+        returns = tensor_dict["state_value_targets"]
+        gaes = returns - tensor_dict["old_values"]
+        action_gaes = gaes[torch.where(tensor_dict["action_mask"])]
+        advantages = (gaes - action_gaes.mean()) * tensor_dict["action_mask"] / (
+            action_gaes.std() + torch.finfo(gaes.dtype).eps
+        )
+        return {"advantages": advantages, "returns": returns}
     
     # \delta_t = r_t + \gamma * V(s_{t+1}) - V(s_t)
     next_values = F.pad(tensor_dict["old_values"][:, 1:], (0, 1), value=0)
@@ -55,23 +66,59 @@ def _compute_reinforce_adv(
     norm_var: bool
 ) -> Dict[str, torch.Tensor]:
     
-    rewards = tensor_dict["rewards"].sum(-1).view(-1, responses_per_prompt)
+    rewards = tensor_dict["rewards"].sum(-1)
 
     if responses_per_prompt == 1 or global_norm:
         baseline = rewards.mean()
         std = rewards.std()
+        advantages = rewards - baseline
+        if norm_var:
+            advantages /= (
+                std + torch.finfo(advantages.dtype).eps
+            )
+    elif "adv_group_id" in tensor_dict:
+        group_ids = tensor_dict["adv_group_id"][:, 0]
+        advantages = torch.zeros_like(rewards)
+        for group_id in torch.unique(group_ids):
+            indices = group_ids == group_id
+            grouped_rewards = rewards[indices]
+            advantages[indices] = grouped_rewards - grouped_rewards.mean()
+            if norm_var:
+                advantages[indices] /= (
+                    grouped_rewards.std() +
+                    torch.finfo(advantages.dtype).eps
+                )
     else:
+        rewards = rewards.view(-1, responses_per_prompt)
         baseline = rewards.mean(-1, keepdim=True)
         std = rewards.std(-1, keepdim=True)
-
-    advantages = rewards - baseline
-    if norm_var:
-        advantages /= (
-            std + torch.finfo(advantages.dtype).eps
-        )
+        advantages = rewards - baseline
+        if norm_var:
+            advantages /= (
+                std + torch.finfo(advantages.dtype).eps
+            )
+        advantages = advantages.view(-1)
 
     advantages = advantages.view(-1, 1) * tensor_dict["action_mask"]
     return {"advantages": advantages}
+
+def _get_reward_tensor(
+    config: DictConfig,
+    tensor_dict: Dict[str, torch.Tensor]
+) -> torch.Tensor:
+    if not getattr(config.rollout, "multi_agent", None):
+        return tensor_dict["rewards"]
+    if not config.rollout.multi_agent.enabled:
+        return tensor_dict["rewards"]
+
+    reward_mode = config.rollout.multi_agent.reward_mode
+    if reward_mode == "individual":
+        return tensor_dict["rewards"]
+    if reward_mode == "team" and "team_rewards" in tensor_dict:
+        return tensor_dict["team_rewards"]
+    if reward_mode == "mixed" and "team_rewards" in tensor_dict:
+        return tensor_dict["rewards"] + tensor_dict["team_rewards"]
+    return tensor_dict["rewards"]
 
 @time_logger("compute_advantages")
 def compute_advantages(
@@ -117,7 +164,10 @@ def compute_advantages(
     processed_tensor_dict = pack_tensor_dicts([
         _extract_actions(
             {
-                k: v[start:end]
+                k: (
+                    _get_reward_tensor(config, tensor_dict)[start:end]
+                    if k == "rewards" else v[start:end]
+                )
                 for k, v in tensor_dict.items()
             }
         )
@@ -126,7 +176,10 @@ def compute_advantages(
 
     if config.adv.estimator == "gae":
         tensor_dict_delta = _compute_gae(
-            processed_tensor_dict, config.adv.gamma, config.adv.lamda
+            processed_tensor_dict,
+            config.adv.gamma,
+            config.adv.lamda,
+            config.critic.use_centralized_value
         )
     elif config.adv.estimator == "reinforce":
         tensor_dict_delta = _compute_reinforce_adv(
