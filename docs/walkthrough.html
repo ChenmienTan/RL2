@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RL2 Code Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/languages/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/languages/yaml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/languages/bash.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/atom-one-dark.min.css">
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg-elev: #161b22;
+    --bg-card: #1a2029;
+    --border: #2a3340;
+    --text: #d6dde6;
+    --text-dim: #8b97a8;
+    --text-strong: #ffffff;
+    --accent: #7ee0c2;
+    --accent-strong: #4fd1a3;
+    --warn: #ffb86c;
+    --link: #82aaff;
+    --code-bg: #0d1117;
+    --tag-bg: #1f2933;
+    --rail-w: 290px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { background: var(--tag-bg); padding: 1px 6px; border-radius: 4px; font-size: 0.88em; color: #ffd28b; }
+  pre { background: var(--code-bg) !important; border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55; }
+  pre code { background: transparent; padding: 0; color: inherit; }
+
+  /* layout */
+  .layout { display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
+  .sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    background: #0b1015; border-right: 1px solid var(--border); padding: 22px 18px 32px; }
+  .sidebar h1 { font-size: 18px; margin: 0 0 4px; color: var(--text-strong); letter-spacing: -0.01em; }
+  .sidebar .sub { color: var(--text-dim); font-size: 12px; margin-bottom: 22px; }
+  .sidebar nav ol { list-style: none; padding: 0; margin: 0; counter-reset: sec; }
+  .sidebar nav > ol > li { counter-increment: sec; }
+  .sidebar nav a { display: block; color: var(--text-dim); padding: 6px 8px; border-radius: 6px;
+    font-size: 13.5px; border-left: 2px solid transparent; }
+  .sidebar nav > ol > li > a::before { content: counter(sec) ". "; color: var(--text-dim); margin-right: 4px; opacity: 0.7;}
+  .sidebar nav a:hover { color: var(--text-strong); text-decoration: none; background: var(--bg-elev); }
+  .sidebar nav a.active { color: var(--accent); border-left-color: var(--accent); background: rgba(126,224,194,0.07); }
+  .sidebar nav ul { list-style: none; padding-left: 14px; margin: 2px 0 6px; border-left: 1px solid var(--border); }
+  .sidebar nav ul a { font-size: 12.5px; padding: 4px 8px; }
+
+  main { max-width: 980px; padding: 38px 46px 90px; }
+  .hero { background: linear-gradient(135deg, #1a2a35, #11181f); border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px 32px; margin-bottom: 36px; }
+  .hero h1 { margin: 0 0 8px; font-size: 30px; color: var(--text-strong); letter-spacing: -0.02em; }
+  .hero p { margin: 0; color: var(--text-dim); max-width: 70ch; }
+  .hero .pill-row { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; background: var(--tag-bg);
+    color: var(--text); padding: 4px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  section { margin: 60px 0 0; scroll-margin-top: 16px; }
+  section > h2 { font-size: 24px; color: var(--text-strong); margin: 0 0 6px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+  section > .lede { color: var(--text-dim); margin: 0 0 22px; max-width: 78ch; }
+  section h3 { font-size: 18px; color: var(--text-strong); margin: 28px 0 10px; }
+  section h4 { font-size: 15px; color: var(--accent); margin: 22px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin: 14px 0; }
+  .card.tight { padding: 12px 14px; }
+  .card h4 { margin-top: 0; }
+
+  .grid { display: grid; gap: 14px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 28px 22px 60px; }
+    .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
+  }
+
+  .file-ref { display: inline-flex; align-items: center; gap: 6px; background: var(--tag-bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 12px;
+    color: #ffd28b; font-family: 'JetBrains Mono', monospace; }
+  .file-ref::before { content: "📄"; font-size: 11px; opacity: 0.7; }
+
+  .callout { border-left: 3px solid var(--accent); background: rgba(126,224,194,0.06);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; color: var(--text); }
+  .callout.warn { border-left-color: var(--warn); background: rgba(255,184,108,0.07); }
+  .callout strong { color: var(--text-strong); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-strong); background: var(--bg-elev); font-weight: 600; font-size: 12.5px;
+       text-transform: uppercase; letter-spacing: 0.04em; }
+  td code { white-space: nowrap; }
+
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  li code { white-space: nowrap; }
+
+  .mermaid { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin: 16px 0; text-align: center; }
+
+  .step-list { counter-reset: step; padding: 0; list-style: none; }
+  .step-list > li { counter-increment: step; padding-left: 44px; position: relative; margin: 14px 0; }
+  .step-list > li::before { content: counter(step); position: absolute; left: 0; top: 2px;
+    width: 30px; height: 30px; line-height: 30px; text-align: center;
+    border-radius: 50%; background: var(--accent); color: #0b1015; font-weight: 700; font-size: 13px; }
+
+  .kbd { background: #0d1117; border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  hr.sep { border: 0; border-top: 1px dashed var(--border); margin: 28px 0; }
+
+  .scroll-progress { position: fixed; top: 0; left: 0; height: 3px; background: var(--accent);
+    width: 0%; z-index: 100; transition: width 0.1s; }
+</style>
+</head>
+<body>
+<div class="scroll-progress" id="progress"></div>
+<div class="layout">
+  <aside class="sidebar">
+    <h1>RL2 Walkthrough</h1>
+    <div class="sub">A reading guide for <code>ChenmienTan/RL2</code></div>
+    <nav>
+      <ol>
+        <li><a href="#overview">What RL2 is</a></li>
+        <li><a href="#repo-map">Repository map</a></li>
+        <li><a href="#core-abstractions">Core abstractions</a>
+          <ul>
+            <li><a href="#abs-trainer">Trainer</a></li>
+            <li><a href="#abs-worker">Worker (Actor / Critic)</a></li>
+            <li><a href="#abs-rollout">Rollout</a></li>
+            <li><a href="#abs-dataset">Dataset / Sample</a></li>
+            <li><a href="#abs-env">Environment</a></li>
+          </ul>
+        </li>
+        <li><a href="#reading-order">Suggested reading order</a></li>
+        <li><a href="#ppo-deep">PPO loop, line by line</a></li>
+        <li><a href="#data-flow">Data &amp; tensor flow</a></li>
+        <li><a href="#parallelism">Parallelism (DDP / FSDP / CP / TP)</a></li>
+        <li><a href="#algorithms">Algorithms (REINFORCE, GAE, DPO, PPO)</a></li>
+        <li><a href="#hybrid-engine">Hybrid engine: weight sync to SGLang</a></li>
+        <li><a href="#capability">What you can build with it</a></li>
+        <li><a href="#extending">Extending RL2</a></li>
+        <li><a href="#cheatsheet">Cheat sheet</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <div class="hero">
+      <h1>RL2: Ray Less Reinforcement Learning</h1>
+      <p>RL2 is a compact (~4.9k LOC) post-training library for LLMs — SFT, RM, DPO, and PPO/REINFORCE — built on plain <code>torchrun</code>, FSDP/Megatron, and SGLang. This guide walks you through how the codebase is organized, what the key abstractions are, and the order I recommend for reading the code so you can extend it confidently.</p>
+      <div class="pill-row">
+        <span class="pill"><span class="dot"></span>~4.9k lines of Python</span>
+        <span class="pill"><span class="dot"></span>FSDP + Megatron backends</span>
+        <span class="pill"><span class="dot"></span>SGLang async rollout</span>
+        <span class="pill"><span class="dot"></span>Hydra configs, no Ray</span>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <section id="overview">
+      <h2>1. What RL2 is</h2>
+      <p class="lede">A "framework" but written like a script: every training step is an explicit Python statement in <code>RL2/trainer/*.py</code>. There is no actor-pool / engine indirection. You launch with <code>torchrun</code>, and the same processes own the trainer, the policy/critic models (FSDP), and they spawn local SGLang inference servers for rollout.</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>Design pillars</h4>
+          <ul>
+            <li><strong>No Ray</strong> — pure <code>torch.distributed</code> + <code>multiprocessing</code> for SGLang.</li>
+            <li><strong>Hybrid engine</strong> — same GPUs host training (FSDP) and inference (SGLang); weights are pushed at every step.</li>
+            <li><strong>Sequence packing</strong> — everything is variable-length, packed into balanced minibatches.</li>
+            <li><strong>Backend-pluggable</strong> — <code>actor=fsdp</code> or <code>actor=megatron</code> swaps the model engine.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>What it supports</h4>
+          <ul>
+            <li>SFT, Reward Model, DPO, PPO, REINFORCE / Dr. GRPO / GRPO.</li>
+            <li>Multi-turn agentic rollout via a user-supplied <code>env_step</code>.</li>
+            <li>3D parallelism (DP/CP/TP) on FSDP, 5D on Megatron.</li>
+            <li>Partial rollout, dynamic filtering, KL regularization (k1/k2/k3).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="repo-map">
+      <h2>2. Repository map</h2>
+      <p class="lede">Open the repo and you'll see four directories that matter. The whole project is small enough that this is the entire mental model.</p>
+
+      <div class="mermaid">
+flowchart LR
+  A[examples/<br/>shell launchers] --> B[RL2/trainer/<br/>train loop + Hydra config]
+  B --> C[RL2/workers/<br/>Actor · Critic · Rollout]
+  B --> D[RL2/datasets/<br/>SFT/RM/DPO/RL datasets]
+  C --> E[RL2/utils/<br/>parallelism · algorithms · comms]
+  D --> E
+  C --> F[envs/<br/>user-defined env_step]
+  F -.referenced via.-> B
+  classDef dir fill:#1a2029,stroke:#2a3340,color:#d6dde6;
+  class A,B,C,D,E,F dir;
+      </div>
+
+      <table>
+        <thead><tr><th>Path</th><th>Role</th><th>When you read it</th></tr></thead>
+        <tbody>
+          <tr><td><span class="file-ref">RL2/trainer/</span></td><td>Top-level training loops (sft, rm, dpo, ppo) + Hydra YAMLs.</td><td>First. Each file is &lt;110 lines and is the script.</td></tr>
+          <tr><td><span class="file-ref">RL2/workers/</span></td><td><code>Actor</code> / <code>Critic</code> wrap a model + optimizer; <code>Rollout</code> wraps SGLang.</td><td>Second. The methods called by the trainer live here.</td></tr>
+          <tr><td><span class="file-ref">RL2/datasets/</span></td><td>Dataset classes + <code>Sample</code>/<code>SampleGroup</code> (the rollout state machine).</td><td>Read <code>rl.py</code> to understand multi-turn trajectories.</td></tr>
+          <tr><td><span class="file-ref">RL2/utils/</span></td><td>Loss math (<code>algorithms.py</code>), packing, FSDP/CP/TP helpers.</td><td>Reference, when you want to know <em>how</em>.</td></tr>
+          <tr><td><span class="file-ref">envs/</span></td><td>Reference environments: countdown, searchr1, gem, deep_research.</td><td>Read one (<code>countdown.py</code>) for the env contract.</td></tr>
+          <tr><td><span class="file-ref">examples/</span></td><td>Shell scripts showing every CLI override needed to run a job.</td><td>Use as a template for your own runs.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="core-abstractions">
+      <h2>3. Core abstractions</h2>
+      <p class="lede">There are really only five concepts in this library. Once you know them, every file in <code>RL2/</code> reads as a variation on the same theme.</p>
+
+      <div class="mermaid">
+classDiagram
+  class Trainer {
+    +config
+    +load_ckpt() / save_ckpt() / save_model()
+    +train()
+  }
+  class Worker {
+    +tokenizer
+    +train: bool
+  }
+  class FSDPWorker {
+    +model_device_mesh (ddp, fsdp, tp)
+    +device_mesh (dp, cp, tp)
+    +_scatter_data() / _gather_data()
+    +_optimizer_step()
+  }
+  class FSDPActor {
+    +compute_logps()
+    +sft_step() / dpo_step() / ppo_update()
+    +update_rollout()
+  }
+  class FSDPCritic {
+    +compute_values()
+    +rm_step() / ppo_update()
+  }
+  class Rollout {
+    +__call__(train, step) -> tensor_dict
+    +update(named_tensors)  // weight sync
+  }
+  class SampleGroup {
+    +samples: list~Sample~
+    +generate(router_url, env.generate)
+  }
+  Trainer ..> FSDPActor : owns
+  Trainer ..> FSDPCritic : owns (PPO+GAE)
+  Trainer ..> Rollout : owns (PPO)
+  Worker <|-- FSDPWorker
+  FSDPWorker <|-- FSDPActor
+  FSDPWorker <|-- FSDPCritic
+  Rollout ..> SampleGroup : schedules
+      </div>
+
+      <h3 id="abs-trainer">3.1 Trainer</h3>
+      <p>Every training mode (<code>sft.py</code>, <code>rm.py</code>, <code>dpo.py</code>, <code>ppo.py</code>) extends <code>Trainer</code>. The base class only handles checkpoint resume + wandb. The subclass <em>is</em> the algorithm, written as a flat Python loop:</p>
+
+```49:86:RL2/trainer/base.py
+def load_ckpt(self, workers: Sequence[Worker]) -> int:
+
+    if self.load_dir is None:
+        return 0
+    for worker in workers:
+        worker_name = "actor" if "Actor" in worker.__class__.__name__ else "critic"
+        worker.load_ckpt(f"{self.load_dir}/{worker_name}/optimizer_scheduler")
+
+    ckpt = self._get_ckpt(0)
+    dcp.load(ckpt, checkpoint_id=f"{self.load_dir}/trainer")
+    if dist.get_rank() == 0:
+        self.train_dataloader.load_state_dict(ckpt["dataloader"])
+    return ckpt["step"]
+```
+
+      <h3 id="abs-worker">3.2 Worker — Actor &amp; Critic</h3>
+      <p><code>Worker</code> is just <code>{config, train, tokenizer}</code>. The interesting layer is <code>FSDPWorker</code> which sets up two device meshes:</p>
+
+      <ul>
+        <li><strong><code>model_device_mesh = (ddp, fsdp, tp)</code></strong> — used to wrap the model with hybrid-shard FSDP.</li>
+        <li><strong><code>device_mesh = (dp, cp, tp)</code></strong> — used for data scattering and ring-attention along the sequence dimension.</li>
+      </ul>
+
+```28:48:RL2/workers/fsdp/base.py
+self.model_device_mesh = dist.device_mesh.init_device_mesh(
+    "cuda",
+    mesh_dim_names=("ddp", "fsdp", "tp"),
+    mesh_shape=(
+        config.ddp_size,
+        world_size // (config.ddp_size * config.tp_size),
+        config.tp_size
+    )
+)
+
+assert world_size % (config.cp_size * config.tp_size) == 0, \
+    f"World_size {world_size} must be divisible by cp_size {config.cp_size} * tp_size {config.tp_size}."
+self.device_mesh = dist.device_mesh.init_device_mesh(
+    "cuda",
+    mesh_dim_names=("dp", "cp", "tp"),
+    mesh_shape=(
+        world_size // (config.cp_size * config.tp_size),
+        config.cp_size,
+        config.tp_size
+    )
+)
+```
+
+      <p><code>FSDPActor</code> adds the model + the four "ops" the trainer calls: <code>compute_logps</code>, <code>sft_step</code>, <code>dpo_step</code>, <code>ppo_update</code>, plus <code>update_rollout</code> for weight sync. <code>FSDPCritic</code> uses <code>AutoModelForTokenClassification</code> with one label head and exposes <code>compute_values</code>, <code>rm_step</code>, <code>ppo_update</code>.</p>
+
+      <div class="callout">
+        <strong>Mental model:</strong> the trainer never touches the model directly. It hands a <em>tensor_dict</em> to the worker; the worker scatters → forwards → backwards → optimizer.step → gathers, all behind one method call.
+      </div>
+
+      <h3 id="abs-rollout">3.3 Rollout</h3>
+      <p><code>Rollout</code> is the only worker that doesn't hold model weights. On rank 0 it owns the dataloader + an SGLang router process; on every TP-rank-0 it spawns an SGLang server process. <code>__call__(train, step)</code> drives the entire rollout phase, returning a packed <code>tensor_dict</code> ready for training.</p>
+
+```67:93:RL2/workers/rollout.py
+class Rollout:
+
+    def __init__(self, config: DictConfig):
+        
+        self.config = config
+        self._prepare_device_mesh()
+        self._prepare_environment_variables()
+
+        if dist.get_rank() == 0:
+
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                config.server_args.model_path, trust_remote_code=True
+            )
+            self.train_dataloader, self.test_dataloader = get_dataloaders(
+                RLDataset, config, self.tokenizer, 1
+            )
+
+            self._prepare_environment()
+            self.sample_buffer: List[SampleGroup] = []
+
+            self._launch_router_process()
+
+        dist.barrier(group=get_gloo_group())
+        
+        if self.device_mesh["tp"].get_local_rank() == 0:
+            self._launch_server_process()
+```
+
+      <h3 id="abs-dataset">3.4 Dataset / Sample / SampleGroup</h3>
+      <p>SFT/RM/DPO datasets each return a <em>tensor_dict</em> directly. The PPO dataset is different — its items are <code>SampleGroup</code> objects (a group of <code>responses_per_prompt</code> rollouts of the same prompt) so that GRPO-style group-baseline normalization is natural.</p>
+
+```16:50:RL2/datasets/rl.py
+@dataclass
+class Sample:
+
+    class Status(Enum):
+
+        RUNNING = "running"
+        ABORTED = "aborted"
+        DONE = "done"
+
+    # for initialization
+    sample: Dict[str, Any] = field(default_factory=dict)
+
+    # for environment interaction
+    state_text: str = ""
+    action_text: str = ""
+
+    # for training
+    state_dict: Dict[str, List[int | float]] = field(default_factory=dict)
+    state_dicts: List[Dict[str, List[int | float]]] = field(default_factory=list)
+```
+
+      <p>A <code>Sample</code> is a small state machine: it can be <em>RUNNING</em>, <em>ABORTED</em> (used for partial rollout / preemption), or <em>DONE</em>. Each turn appends LLM tokens then env tokens to <code>state_dict</code>; if the env's <code>next_state</code> is not a prefix of the previous state, the sample becomes a multi-sequence trajectory.</p>
+
+      <h3 id="abs-env">3.5 Environment</h3>
+      <p>The user contract is a single async function (or two, if you want full control of the loop):</p>
+
+```6:36:envs/countdown.py
+async def env_step(sample: Sample) -> Dict[str, Any]:
+
+    env_response = {
+        "next_state": None,
+        "done": True,
+        "reward": 0.0
+    }
+
+    match = re.search(r"<answer>(.*?)</answer>", sample.action_text)
+    if match is None:
+        return env_response
+    equation = match.group(1).strip()
+    env_response["reward"] = 0.1
+    
+    try:
+        # maybe the number cannot be converted to integer
+        numbers = [int(n) for n in re.findall(r"\d+", equation)]
+        assert sorted(numbers) == sorted(sample.sample["numbers"])
+    except:
+        return env_response
+        
+    try:
+        assert re.match(r"^[\d+\-*/().\s]+$", equation)
+        # maybe the equation is illegal
+        result = eval(equation, {"__builtins__": None}, {})
+        assert abs(result - sample.sample["target"]) < 1e-5
+        env_response["reward"] = 1.0
+    except:
+        pass
+    return env_response
+
+generate = partial(base_generate, env_step_fn=env_step)
+```
+
+      <p><code>base_generate</code> in <code>RL2/datasets/rl.py</code> is the prebuilt rollout loop that uses <code>env_step</code>. The env file just needs a module-level <code>generate</code> callable; the trainer points to it via <code>rollout.env_path=envs/countdown.py</code>.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="reading-order">
+      <h2>4. Suggested reading order</h2>
+      <p class="lede">If you only have an hour, read the files in this exact order. The total is well under 1,500 lines.</p>
+
+      <ol class="step-list">
+        <li>
+          <strong>The README</strong> — gives you the env <code>step</code> contract and the algorithmic recipes (Dr. GRPO default, OpenAI PPO, DeepSeek GRPO).
+        </li>
+        <li>
+          <strong><span class="file-ref">examples/countdown_reinforce.sh</span></strong> — see what a real launch command looks like; every <code>foo.bar=baz</code> override maps 1:1 to a YAML key.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/trainer/ppo.py</span></strong> (108 lines) — the entire PPO algorithm. Read it twice.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/trainer/config/ppo.yaml</span></strong> + <span class="file-ref">actor/fsdp.yaml</span> — the schema of every hyper-parameter.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/workers/__init__.py</span></strong> — the tiny factory that picks FSDP vs Megatron.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/workers/rollout.py</span></strong> — the most novel file: SGLang lifecycle, async scheduling, and the GPU-to-GPU weight push.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/datasets/rl.py</span></strong> — <code>Sample</code> state machine + <code>base_generate</code>. This is the multi-turn engine.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/workers/fsdp/base.py</span></strong> + <span class="file-ref">actor.py</span> — model setup, scatter/gather, <code>_forward</code>, <code>ppo_update</code>.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/utils/algorithms.py</span></strong> — every loss in one ~230-line file: GAE, REINFORCE baseline, DPO, RM, PPO clip, KL k1/k2/k3.
+        </li>
+        <li>
+          <strong><span class="file-ref">RL2/utils/sequences.py</span></strong> — packing/scattering/CP-sliding. Read last; it's pure plumbing.
+        </li>
+      </ol>
+
+      <div class="callout">
+        <strong>Tip:</strong> the SFT/RM/DPO trainers (<code>~60 lines each</code>) are a great warm-up — they share the same <code>Trainer</code> base and <code>FSDPActor</code>/<code>FSDPCritic</code> classes, just without the rollout phase. If PPO feels overwhelming, read <code>sft.py</code> first.
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="ppo-deep">
+      <h2>5. PPO loop, line by line</h2>
+      <p class="lede">This is the heart of the codebase. Everything else exists to support these ~30 lines.</p>
+
+```43:91:RL2/trainer/ppo.py
+async def train(self):
+
+    if self.config.trainer.eval_only:
+        await self.rollout(False, 0)
+        return
+
+    initial = self.load_ckpt(
+        (self.actor, self.critic)
+        if self.config.adv.estimator == "gae"
+        else (self.actor,)
+    )
+    for step in trange(
+        1,
+        self.config.trainer.total_steps + 1,
+        disable=(dist.get_rank() != 0),
+        initial=initial
+    ):
+
+        tensor_dict, cu_seqs = await self.rollout(True, step)
+
+        if self.config.actor.kl.coef > 0:
+            tensor_dict = self.ref_actor.compute_logps(tensor_dict, step)
+        if self.config.adv.estimator == "gae":
+            tensor_dict = self.critic.compute_values(tensor_dict, step)
+        if self.config.actor.kl.coef > 0 or self.config.actor.update_per_rollout > 1:
+            tensor_dict = self.actor.compute_logps(tensor_dict, step)
+
+        if dist.get_rank() == 0:
+            compute_advantages(self.config, tensor_dict, cu_seqs, step)
+
+        self.actor.ppo_update(tensor_dict, step)
+        if self.config.adv.estimator == "gae":
+            self.critic.ppo_update(tensor_dict, step)
+        self.save_ckpt(
+            (self.actor, self.critic)
+            if self.config.adv.estimator == "gae"
+            else (self.actor,),
+            step
+        )
+
+        self.actor.update_rollout(self.rollout, step)
+        if self.config.trainer.test_freq is not None and step % self.config.trainer.test_freq == 0:
+            await self.rollout(False, step)
+```
+
+      <div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant T as PPOTrainer
+  participant R as Rollout (SGLang)
+  participant Ref as RefActor
+  participant C as Critic
+  participant A as Actor
+  Note over T,A: per training step
+  T->>R: __call__(train=True, step)
+  R-->>T: packed tensor_dict + cu_seqs
+  alt kl.coef > 0
+    T->>Ref: compute_logps  → ref_logps
+  end
+  alt adv = gae
+    T->>C: compute_values  → old_values
+  end
+  alt off-policy or kl > 0
+    T->>A: compute_logps   → old_logps
+  end
+  T->>T: compute_advantages (rank 0)
+  T->>A: ppo_update (clipped policy loss)
+  alt adv = gae
+    T->>C: ppo_update (value MSE)
+  end
+  T->>A: update_rollout → push weights to SGLang
+      </div>
+
+      <h3>What each method does to the <code>tensor_dict</code></h3>
+      <table>
+        <thead><tr><th>Call</th><th>Reads</th><th>Writes</th></tr></thead>
+        <tbody>
+          <tr><td><code>rollout()</code></td><td>—</td><td><code>states</code>, <code>actions</code>, <code>action_mask</code>, <code>rewards</code>, <code>llm_logps</code>, <code>position_ids</code>, <code>eos_mask</code></td></tr>
+          <tr><td><code>ref_actor.compute_logps</code></td><td><code>states</code>, <code>actions</code></td><td><code>ref_logps</code></td></tr>
+          <tr><td><code>critic.compute_values</code></td><td><code>states</code></td><td><code>old_values</code></td></tr>
+          <tr><td><code>actor.compute_logps</code></td><td><code>states</code>, <code>actions</code></td><td><code>old_logps</code></td></tr>
+          <tr><td><code>compute_advantages</code></td><td><code>rewards</code> (+ <code>old_values</code>)</td><td><code>advantages</code> (+ <code>returns</code>)</td></tr>
+          <tr><td><code>actor.ppo_update</code></td><td>everything above</td><td>updates weights</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="data-flow">
+      <h2>6. Data &amp; tensor flow</h2>
+      <p class="lede">Every piece of training data in RL2 is eventually a <code>Dict[str, torch.Tensor]</code> with the same keys, regardless of whether you're doing SFT, DPO, or PPO. This uniformity is what lets the same <code>FSDPActor._forward</code> handle every algorithm.</p>
+
+      <div class="mermaid">
+flowchart TB
+  subgraph Rollout["Rollout (rank 0)"]
+    direction TB
+    DL[StatefulCycleDataLoader] --> SG[SampleGroup]
+    SG -- async --> SGL[SGLang router/servers]
+    SGL --> ENV[env_step]
+    ENV --> SG
+    SG --> TD["state_dict[states/actions/<br/>action_mask/logps/rewards]"]
+    TD --> PACK[pack_tensor_dicts]
+  end
+  PACK --> SCATTER["scatter_data<br/>(broadcast → balance → split per DP)"]
+  SCATTER --> CP["slide_along_cp<br/>(zigzag chunks per CP rank)"]
+  CP --> FWD[Model._forward]
+  FWD --> GATHER[gather_along_cp]
+  GATHER --> LOSS[loss + backward]
+  LOSS --> OPT[_optimizer_step]
+      </div>
+
+      <h3>The packing step (<code>RL2/utils/sequences.py</code>)</h3>
+      <p><code>_tensor_dict_to_minibatches</code> takes the flat list of variable-length sequences and uses Karmarkar–Karp bin packing to produce <em>k</em> balanced minibatches whose token totals are roughly equal and whose count is divisible by the number of update steps per rollout.</p>
+
+```17:39:RL2/utils/sequences.py
+"""
+Pack sequences into minibatches for higher throughput.
+There are two constrains:
+  * The number of minibatches must be multiple of `multiple_of`
+  * The length of any minibatch cannot exceed `max_length_per_dp`
+To satisfy the second constraint, the number of minibatches must be
+at least `math.ceil(total_length / max_length_per_dp)`.
+Starting from the first multiple of `multiple_of` that is no less 
+than the value, we pack sequences into `n_minibatches` minibatches 
+and check whether the second constraint is satisfied. If not, we 
+increase `n_minibatches` by `multiple_of` (so that the first 
+constraint is always satisfied) and repeat the loop.
+"""
+seq_len_list = (tensor_dict["eos_mask"].argmax(-1) + 1).tolist()
+```
+
+      <div class="callout warn">
+        <strong>Gotcha:</strong> <code>scatter_data</code> uses module-level globals (<code>SHUFFLE_INDICES</code>, <code>PAD_SEQUENCES</code>) so the matching <code>gather_data</code> can undo the partition. This means you can't have two scatter/gather calls in flight on different threads.
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="parallelism">
+      <h2>7. Parallelism (DDP / FSDP / CP / TP)</h2>
+      <p class="lede">RL2 uses a single <code>torchrun</code> world and slices it three ways for the training engine and a separate way for the rollout engine.</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>Training device mesh</h4>
+          <p>Built in <code>FSDPWorker.__init__</code>. Two views over the same processes:</p>
+          <ul>
+            <li><code>(ddp, fsdp, tp)</code> — feeds <code>FSDP(sharding=HYBRID_SHARD)</code>: shard inside the <code>fsdp</code> dim, replicate across <code>ddp</code>.</li>
+            <li><code>(dp, cp, tp)</code> — used to scatter data and to drive ring-flash-attention along <code>cp</code>.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>Rollout device mesh</h4>
+          <p>Built in <code>Rollout._prepare_device_mesh</code>. Just <code>(dp, tp)</code> on CPU — only used to know who launches an SGLang server (TP rank 0) and who routes (rank 0 globally).</p>
+        </div>
+      </div>
+
+      <h3>FSDP wrap policy</h3>
+
+```44:53:RL2/utils/fsdp/data_parallelism.py
+return FSDP(
+    model,
+    auto_wrap_policy=auto_wrap_policy,
+    sharding_strategy=ShardingStrategy.HYBRID_SHARD,
+    mixed_precision=mixed_precision,
+    param_init_fn=_param_init_fn,
+    sync_module_states=sync_module_states,
+    device_mesh=device_mesh,
+    device_id=torch.cuda.current_device()
+)
+```
+
+      <h3>Context parallelism — Zigzag ring attention</h3>
+      <p>Sequences are split along the time dimension across <code>cp_size</code> ranks using a zigzag pattern (chunk <em>i</em> and chunk <em>2c−i−1</em> on rank <em>i</em>) so each rank carries a balanced amount of causal-attention work. The attention forward is replaced by <code>zigzag_ring_flash_attn_varlen_func</code> via a global monkeypatch in <code>RL2/utils/fsdp/context_parallelism.py</code>.</p>
+
+      <h3>Tensor parallelism + logits</h3>
+      <p>When TP &gt; 1, each rank holds a vocab shard. Computing log-probs requires (a) chunked <code>logsumexp</code> across the local vocab + an <code>all_gather</code>+<code>logsumexp</code> across ranks, and (b) a "gather your own actions" pattern with a differentiable <code>all_reduce</code>. See <code>compute_logps_and_entropy</code> in <code>RL2/utils/functions.py</code>.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="algorithms">
+      <h2>8. Algorithms (REINFORCE, GAE, DPO, PPO)</h2>
+      <p class="lede">All loss math lives in one file: <span class="file-ref">RL2/utils/algorithms.py</span>. Reading the whole file (~230 lines) gives you the complete algorithmic surface.</p>
+
+      <table>
+        <thead><tr><th>Function</th><th>What it computes</th><th>Used by</th></tr></thead>
+        <tbody>
+          <tr><td><code>compute_approx_kl(logps, ref_logps, est)</code></td><td>k1 = log r, k2 = ½(log r)², k3 = log r + e<sup>−log r</sup> − 1</td><td>KL reward / KL loss</td></tr>
+          <tr><td><code>_compute_gae</code></td><td>Generalized Advantage Estimation; advantages standardized by action-token mean/std.</td><td><code>compute_advantages</code></td></tr>
+          <tr><td><code>_compute_reinforce_adv</code></td><td>Group-baseline (<code>responses_per_prompt</code>) — Dr. GRPO when <code>norm_var=false</code>, GRPO when <code>norm_var=true</code>.</td><td><code>compute_advantages</code></td></tr>
+          <tr><td><code>actor_ppo_loss</code></td><td>Clipped surrogate (with optional TIS for off-policy correction + entropy bonus).</td><td><code>FSDPActor.ppo_update</code></td></tr>
+          <tr><td><code>critic_ppo_loss</code></td><td>Clipped value MSE (max of unclipped vs clipped, like OpenAI PPO).</td><td><code>FSDPCritic.ppo_update</code></td></tr>
+          <tr><td><code>dpo_loss</code> / <code>rm_loss</code></td><td>Pairwise sigmoid losses on (chosen, rejected).</td><td>DPO/RM trainers</td></tr>
+        </tbody>
+      </table>
+
+```180:222:RL2/utils/algorithms.py
+def actor_ppo_loss(
+    config: DictConfig, minibatch: Dict[str, torch.Tensor]
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    ratio = torch.exp(
+        minibatch["logps"] - minibatch.get(
+            "old_logps", minibatch["logps"].detach()
+        )
+        # We do not compute old_logps
+        # if kl.coef == 0 and update_per_rollout == 1
+    )
+    clipped_ratio = torch.clamp(
+        ratio, 1 - config.clip, 1 + config.clip
+    )
+    objective = minibatch["advantages"] * ratio
+    clipped_objective = minibatch["advantages"] * clipped_ratio
+    losses = - torch.min(objective, clipped_objective)
+```
+
+      <div class="callout">
+        <strong>Algorithm dial:</strong> the same <code>actor_ppo_loss</code> + <code>compute_advantages</code> implements REINFORCE, Dr. GRPO (default), GRPO, and OpenAI PPO. Switching between them is a matter of toggling <code>adv.estimator</code>, <code>kl.type</code>, <code>actor.avg_level</code>, and <code>adv.norm_var</code>. Read the README "Algorithm" section for the exact dial settings.
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="hybrid-engine">
+      <h2>9. Hybrid engine: weight sync to SGLang</h2>
+      <p class="lede">The single most distinctive piece of the codebase. After every PPO update, the FSDP-sharded actor pushes its weights to the local SGLang server <em>without going through the network</em> — using shared-memory tensor handles.</p>
+
+      <div class="mermaid">
+flowchart LR
+  A["FSDPActor.update_rollout<br/>(yields named DTensor params)"] --> B["Rollout.update<br/>(buckets by dtype)"]
+  B --> C["DTensor.redistribute([Replicate])<br/>→ local full tensor on GPU"]
+  C --> D["FlattenedTensorBucket<br/>+ MultiprocessingSerializer.serialize()"]
+  D --> E["dist.gather_object across TP<br/>→ TP-rank-0"]
+  E --> F["HTTP POST /update_weights_from_tensor<br/>(sends only metadata; actual<br/>tensor copied via shared mem)"]
+  F --> G[SGLang server applies weights]
+      </div>
+
+      <p>Two HTTP endpoints from SGLang make this work:</p>
+      <ul>
+        <li><code>release_memory_occupation</code> — called after rollout to free KV cache + weights.</li>
+        <li><code>resume_memory_occupation</code> — called before weight update; only weights are resumed first to avoid OOM, then KV cache is resumed after the new weights are installed.</li>
+      </ul>
+
+      <p>Why it's fast: <code>MultiprocessingSerializer</code> + <code>FlattenedTensorBucket</code> exchange CUDA IPC handles, so the SGLang process maps the actor's GPU memory directly. The HTTP body contains only metadata.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="capability">
+      <h2>10. What you can build with it</h2>
+      <p class="lede">Concretely, here's what each trainer enables out of the box.</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>Supervised Fine-Tuning</h4>
+          <p>Standard cross-entropy on prompt/response or multi-turn messages. Both formats supported by <code>SFTDataset._tokenize_prompt_response</code> / <code>_tokenize_messages</code>.</p>
+        </div>
+        <div class="card">
+          <h4>Reward Modeling</h4>
+          <p>Pairwise Bradley–Terry on chosen/rejected, packing chosen+rejected together (token-classification head, single scalar per token, masked to EOS).</p>
+        </div>
+        <div class="card">
+          <h4>DPO</h4>
+          <p>Pairwise sigmoid loss using <code>logp − ref_logp</code>. Reference policy is a frozen actor; ref logps are computed once per batch.</p>
+        </div>
+        <div class="card">
+          <h4>PPO / REINFORCE / GRPO / Dr. GRPO</h4>
+          <p>Multi-turn agentic rollout with per-token rewards, optional value head (GAE) or group baseline (REINFORCE family). Configurable KL placement (reward vs loss) and estimator (k1/k2/k3).</p>
+        </div>
+        <div class="card">
+          <h4>Multi-turn agents</h4>
+          <p>Any environment expressible as <code>async env_step(sample) -> {next_state, reward, done}</code>. Examples: tool-use search (SearchR1), countdown reasoning, deep research, GEM environments.</p>
+        </div>
+        <div class="card">
+          <h4>Eval-only</h4>
+          <p>Set <code>trainer.eval_only=true</code> and a single <code>rollout(False, 0)</code> runs your env across the test split with greedy decoding.</p>
+        </div>
+      </div>
+
+      <h3>Capability matrix</h3>
+      <table>
+        <thead><tr><th>Feature</th><th>Knob</th><th>Where it lives</th></tr></thead>
+        <tbody>
+          <tr><td>Tensor parallelism</td><td><code>actor.tp_size</code></td><td><code>RL2/utils/fsdp/tensor_parallelism.py</code></td></tr>
+          <tr><td>Context parallelism (Zigzag ring)</td><td><code>actor.cp_size</code></td><td><code>RL2/utils/fsdp/context_parallelism.py</code></td></tr>
+          <tr><td>Hybrid-shard FSDP (DDP × FSDP)</td><td><code>actor.ddp_size</code></td><td><code>RL2/utils/fsdp/data_parallelism.py</code></td></tr>
+          <tr><td>Megatron 5D (DP/CP/PP/TP/EP)</td><td><code>actor=megatron</code></td><td><code>RL2/workers/megatron/*</code></td></tr>
+          <tr><td>Partial rollout</td><td><code>rollout.train.partial_rollout=true</code></td><td><code>Rollout.__call__</code> + <code>Sample.ABORTED</code></td></tr>
+          <tr><td>Dynamic filtering (drop zero-variance groups)</td><td><code>rollout.train.dynamic_filtering=true</code></td><td><code>Rollout.__call__</code></td></tr>
+          <tr><td>Liger kernels</td><td><code>actor.use_liger_kernel=true</code></td><td><code>FSDPActor.__init__</code></td></tr>
+          <tr><td>Param/optimizer offload</td><td><code>actor.offload_model</code>, <code>offload_optimizer</code></td><td><code>FSDPWorker._load_*_to_device</code></td></tr>
+          <tr><td>Gradient checkpointing</td><td><code>actor.enable_gradient_checkpointing</code></td><td><code>FSDPWorker._prepare_model_optimizer</code></td></tr>
+          <tr><td>Resumable dataloader</td><td>auto via <code>StatefulDataLoader</code></td><td><code>RL2/datasets/base.py</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="extending">
+      <h2>11. Extending RL2</h2>
+
+      <h3>Add a new environment</h3>
+      <ol>
+        <li>Create <code>envs/my_env.py</code> with an <code>async def env_step(sample) -> dict</code>.</li>
+        <li>At module top-level, expose <code>generate = partial(base_generate, env_step_fn=env_step)</code>.</li>
+        <li>Set <code>rollout.env_path=envs/my_env.py</code> on the launch command.</li>
+        <li>Make sure your dataset rows have whatever <code>env_step</code> reads from <code>sample.sample</code> (e.g. <code>extra_info.answer</code>).</li>
+      </ol>
+
+      <h3>Add a new advantage / loss</h3>
+      <ol>
+        <li>Add a function in <code>RL2/utils/algorithms.py</code> alongside <code>_compute_gae</code>.</li>
+        <li>Wire it into the dispatcher inside <code>compute_advantages</code> (~line 127).</li>
+        <li>Add the corresponding YAML keys to <code>RL2/trainer/config/ppo.yaml</code> under <code>adv:</code>.</li>
+      </ol>
+
+      <h3>Add a new training mode</h3>
+      <ol>
+        <li>Subclass <code>Trainer</code> in <code>RL2/trainer/my_mode.py</code>.</li>
+        <li>Add a corresponding YAML in <code>RL2/trainer/config/</code> with a <code>defaults:</code> list pointing at <code>actor: fsdp</code>.</li>
+        <li>Add a <code>step</code>-style method on <code>FSDPActor</code> / <code>FSDPCritic</code> if the loss doesn't fit existing ones.</li>
+        <li>Launch with <code>torchrun -m RL2.trainer.my_mode</code>.</li>
+      </ol>
+
+      <h3>Add a new model backend</h3>
+      <p>Look at the existing pattern in <code>RL2/workers/__init__.py</code>: each backend folder (<code>fsdp/</code>, <code>megatron/</code>) defines <code>{Backend}Actor</code> and <code>{Backend}Critic</code> with the same method surface (<code>compute_logps</code>, <code>ppo_update</code>, <code>update_rollout</code>, …). Add a <code>my_backend/</code> folder, register it in the factory, and add a YAML in <code>RL2/trainer/config/actor/</code>.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="cheatsheet">
+      <h2>12. Cheat sheet</h2>
+
+      <h4>Where do I find…</h4>
+      <table>
+        <tbody>
+          <tr><td>The training loop for &lt;mode&gt;</td><td><code>RL2/trainer/{sft,rm,dpo,ppo}.py</code></td></tr>
+          <tr><td>How tokens become a tensor_dict</td><td><code>RL2/datasets/base.py::get_tensor_dict</code></td></tr>
+          <tr><td>How a multi-turn rollout actually runs</td><td><code>RL2/datasets/rl.py::base_generate</code></td></tr>
+          <tr><td>How a forward pass is sharded</td><td><code>RL2/workers/fsdp/actor.py::_forward</code></td></tr>
+          <tr><td>How the optimizer step happens</td><td><code>RL2/workers/fsdp/base.py::_optimizer_step</code></td></tr>
+          <tr><td>Where weights get pushed to SGLang</td><td><code>RL2/workers/rollout.py::Rollout.update</code></td></tr>
+          <tr><td>Where loss is computed</td><td><code>RL2/utils/algorithms.py</code></td></tr>
+          <tr><td>How sequences are packed for throughput</td><td><code>RL2/utils/sequences.py::_tensor_dict_to_minibatches</code></td></tr>
+          <tr><td>How CP zigzag works</td><td><code>RL2/utils/sequences.py::slide_along_cp</code> + <code>RL2/utils/fsdp/context_parallelism.py</code></td></tr>
+          <tr><td>How TP-aware logsumexp works</td><td><code>RL2/utils/functions.py::_compute_logsumexp</code></td></tr>
+        </tbody>
+      </table>
+
+      <h4>Common Hydra overrides</h4>
+      <table>
+        <thead><tr><th>Override</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><code>actor.ddp_size=4 actor.tp_size=2 actor.cp_size=1</code></td><td>3D parallel layout for the actor.</td></tr>
+          <tr><td><code>adv.estimator=gae</code></td><td>Enables critic + GAE; without it, REINFORCE-family.</td></tr>
+          <tr><td><code>actor.kl.coef=0.001 actor.kl.type=loss actor.kl.loss_estimator=k3</code></td><td>DeepSeek GRPO-style KL.</td></tr>
+          <tr><td><code>actor.avg_level=sequence</code></td><td>Sequence-mean loss (DeepSeek), default is <code>token</code> (Dr. GRPO).</td></tr>
+          <tr><td><code>rollout.train.responses_per_prompt=8</code></td><td>Sample 8 rollouts per prompt → group baseline.</td></tr>
+          <tr><td><code>rollout.train.partial_rollout=true</code></td><td>Pause/resume long rollouts, keep buffer for next step.</td></tr>
+          <tr><td><code>actor.update_per_rollout=4</code></td><td>4 PPO epochs per rollout batch (true off-policy).</td></tr>
+          <tr><td><code>trainer.eval_only=true</code></td><td>Run rollout once over the test set, no training.</td></tr>
+        </tbody>
+      </table>
+
+      <hr class="sep" />
+      <p style="color: var(--text-dim); font-size: 13px;">
+        Generated walkthrough of the RL2 repo. Open <span class="file-ref">RL2/trainer/ppo.py</span> in one tab and this guide in another — that's the recommended setup for your first read-through.
+      </p>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1a2029',
+      primaryTextColor: '#d6dde6',
+      primaryBorderColor: '#2a3340',
+      lineColor: '#7ee0c2',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#0f1419',
+      fontFamily: 'Inter, sans-serif',
+      fontSize: '13px'
+    },
+    flowchart: { curve: 'basis', padding: 14 },
+    sequence: { actorMargin: 50, messageMargin: 36 }
+  });
+
+  hljs.highlightAll();
+
+  // Sidebar active section + scroll progress
+  const sections = document.querySelectorAll('main section');
+  const links = document.querySelectorAll('.sidebar nav a');
+  const linkById = {};
+  links.forEach(a => {
+    const id = a.getAttribute('href').slice(1);
+    linkById[id] = a;
+  });
+  const progress = document.getElementById('progress');
+  function onScroll() {
+    const scrollTop = window.scrollY;
+    const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+    progress.style.width = Math.min(100, (scrollTop / docHeight) * 100) + '%';
+
+    let active = sections[0]?.id;
+    sections.forEach(s => {
+      const top = s.getBoundingClientRect().top;
+      if (top < 120) active = s.id;
+    });
+    links.forEach(a => a.classList.remove('active'));
+    if (active && linkById[active]) linkById[active].classList.add('active');
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
+</body>
+</html>
